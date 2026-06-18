@@ -1,8 +1,8 @@
 // ── Supabase config ───────────────────────────────────────────────────────────
 // Replace these two values after creating your Supabase project.
 // Settings → API → Project URL and anon public key.
-const SUPABASE_URL      = 'https://YOUR_PROJECT_REF.supabase.co';
-const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_URL      = 'https://tljiaclwqhbpdfiqkokh.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_arwIDUqEwZL-jdqN4n9lhQ_ot6ABKbi';
 
 // ── Worn-location filter options ──────────────────────────────────────────────
 // Label shown in the dropdown → substring matched against worn_location column.
