@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transmog Exchange — Gemstone IV</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>Transmog Exchange</h1>
+      <p class="subtitle">Community transmog catalog for Gemstone IV</p>
+      <div id="stats" class="stats">Loading catalog&hellip;</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="search-bar">
+      <input id="query" type="text" placeholder="Search by name, noun, or location&hellip;" autocomplete="off">
+      <select id="location-filter"></select>
+      <button id="search-btn">Search</button>
+    </section>
+
+    <div id="results-info" class="results-info"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Character</th>
+            <th>Noun</th>
+            <th>Full Name</th>
+            <th>Worn Location</th>
+            <th>Qty</th>
+          </tr>
+        </thead>
+        <tbody id="results-body">
+          <tr><td colspan="5" class="empty-state">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div id="pagination" class="pagination"></div>
+  </main>
+
+  <footer>
+    <p>
+      Share your catalog in-game: <strong>;transmog_inventory upload</strong>
+      &nbsp;&middot;&nbsp;
+      <a href="https://github.com/Lillymara/transmog-exchange" target="_blank" rel="noopener">GitHub</a>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
