@@ -154,11 +154,12 @@ tbody td {
   vertical-align: top;
 }
 
-.col-char { color: var(--gold-dim); font-size: 0.8rem; white-space: nowrap; }
-.col-noun { color: var(--muted);    white-space: nowrap; }
-.col-name { color: var(--text); }
-.col-loc  { color: var(--muted);    font-size: 0.8rem; white-space: nowrap; }
-.col-qty  { color: var(--muted);    text-align: center; width: 2.5rem; }
+.col-char    { color: var(--gold-dim); font-size: 0.8rem; white-space: nowrap; }
+.col-noun    { color: var(--muted);    white-space: nowrap; }
+.col-name    { color: var(--text); }
+.col-loc     { color: var(--muted);    font-size: 0.8rem; white-space: nowrap; }
+.col-notes   { color: var(--gold-dim); font-size: 0.82rem; max-width: 200px; }
+.col-updated { color: var(--muted);    font-size: 0.78rem; white-space: nowrap; }
 
 .empty-state {
   color: var(--muted);

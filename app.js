@@ -63,6 +63,17 @@ function esc(s) {
     .replace(/>/g, '&gt;');
 }
 
+function timeAgo(isoString) {
+  if (!isoString) return '';
+  const seconds = Math.floor((Date.now() - new Date(isoString)) / 1000);
+  if (seconds < 60)              return 'just now';
+  if (seconds < 3600)            return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400)           return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 86400 * 30)      return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 86400 * 365)     return `${Math.floor(seconds / (86400 * 30))}mo ago`;
+  return `${Math.floor(seconds / (86400 * 365))}y ago`;
+}
+
 function setInfo(text) {
   document.getElementById('results-info').textContent = text;
 }
@@ -70,7 +81,7 @@ function setInfo(text) {
 function renderRows(rows) {
   const tbody = document.getElementById('results-body');
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No items found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No items found.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => `
@@ -79,7 +90,8 @@ function renderRows(rows) {
       <td class="col-noun">${esc(r.noun)}</td>
       <td class="col-name">${esc(r.full_name)}</td>
       <td class="col-loc">${esc(r.worn_location)}</td>
-      <td class="col-qty">${r.quantity > 1 ? esc(r.quantity) : ''}</td>
+      <td class="col-notes">${esc(r.notes)}</td>
+      <td class="col-updated" title="${esc(r.last_upload)}">${timeAgo(r.last_upload)}</td>
     </tr>`).join('');
 }
 
@@ -115,7 +127,7 @@ async function search() {
   const { query, location, offset } = state;
 
   document.getElementById('results-body').innerHTML =
-    '<tr><td colspan="5" class="empty-state">Loading…</td></tr>';
+    '<tr><td colspan="6" class="empty-state">Loading…</td></tr>';
   setInfo('');
   document.getElementById('pagination').innerHTML = '';
 
@@ -143,7 +155,7 @@ async function search() {
     renderPagination();
   } catch (e) {
     document.getElementById('results-body').innerHTML =
-      `<tr><td colspan="5" class="empty-state">Error loading results: ${esc(e.message)}</td></tr>`;
+      `<tr><td colspan="6" class="empty-state">Error loading results: ${esc(e.message)}</td></tr>`;
     console.error('search:', e);
   }
 }
