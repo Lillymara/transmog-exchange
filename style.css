@@ -71,25 +71,23 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.5rem;
 }
 
-.search-bar input,
-.search-bar select {
+.search-bar input {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
+  flex: 1;
   font-size: 0.9rem;
+  min-width: 200px;
   outline: none;
   padding: 0.5rem 0.75rem;
   transition: border-color 0.15s;
 }
 
-.search-bar input         { flex: 1; min-width: 200px; }
-.search-bar select        { cursor: pointer; min-width: 190px; }
-.search-bar input:focus,
-.search-bar select:focus  { border-color: var(--gold-dim); }
+.search-bar input:focus { border-color: var(--gold-dim); }
 
 .search-bar button {
   background: var(--gold);
@@ -105,6 +103,48 @@ main {
 }
 
 .search-bar button:hover { background: #dfc070; }
+
+/* ── Filter row ─────────────────────────────────────────────────────────── */
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.filter-row select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  min-width: 150px;
+  outline: none;
+  padding: 0.4rem 0.6rem;
+  transition: border-color 0.15s;
+}
+
+.filter-row select:focus { border-color: var(--gold-dim); }
+
+/* ── Search hint ────────────────────────────────────────────────────────── */
+
+.search-hint {
+  color: var(--muted);
+  font-size: 0.76rem;
+  margin-bottom: 0.75rem;
+}
+
+.search-hint code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--gold-dim);
+  font-family: monospace;
+  font-size: 0.78rem;
+  padding: 1px 4px;
+}
 
 /* ── Results info ───────────────────────────────────────────────────────── */
 
@@ -155,11 +195,26 @@ tbody td {
 }
 
 .col-char    { color: var(--gold-dim); font-size: 0.8rem; white-space: nowrap; }
+.col-alt     { color: var(--muted);    font-size: 0.75rem; }
+.col-discord { color: var(--muted);    font-size: 0.72rem; }
 .col-noun    { color: var(--muted);    white-space: nowrap; }
 .col-name    { color: var(--text); }
 .col-loc     { color: var(--muted);    font-size: 0.8rem; white-space: nowrap; }
+.col-price   { color: var(--text);     font-size: 0.82rem; white-space: nowrap; }
 .col-notes   { color: var(--gold-dim); font-size: 0.82rem; max-width: 200px; }
 .col-updated { color: var(--muted);    font-size: 0.78rem; white-space: nowrap; }
+
+.price-free  {
+  background: rgba(201, 168, 76, 0.15);
+  border: 1px solid var(--gold-dim);
+  border-radius: 3px;
+  color: var(--gold);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
 
 .empty-state {
   color: var(--muted);
