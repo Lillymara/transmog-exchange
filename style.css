@@ -200,13 +200,36 @@ tbody td {
 
 .discord-copy {
   cursor: pointer;
+  position: relative;
   text-decoration: underline;
   text-decoration-style: dotted;
   text-underline-offset: 2px;
   user-select: none;
 }
-.discord-copy:hover    { color: var(--text); }
-.discord-copied        { color: var(--gold) !important; text-decoration: none; }
+
+.discord-copy::after {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  bottom: calc(100% + 5px);
+  color: var(--text);
+  content: 'Click to copy Discord username';
+  font-size: 0.72rem;
+  left: 50%;
+  opacity: 0;
+  padding: 3px 8px;
+  pointer-events: none;
+  position: absolute;
+  transform: translateX(-50%);
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.discord-copy:hover         { color: var(--text); }
+.discord-copy:hover::after  { opacity: 1; }
+.discord-copied             { color: var(--gold) !important; text-decoration: none; }
+.discord-copied::after      { content: 'Copied to clipboard!'; opacity: 1; }
 .col-noun    { color: var(--muted);    white-space: nowrap; }
 .col-name    { color: var(--text); }
 .col-loc     { color: var(--muted);    font-size: 0.8rem; white-space: nowrap; }

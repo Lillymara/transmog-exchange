@@ -302,7 +302,7 @@ function renderRows(rows) {
     const altPart = r.character && r.character !== r.player_name
       ? ` <span class="col-alt">(${esc(r.character)})</span>` : '';
     const discordPart = r.discord_name
-      ? `<br><span class="col-discord"><span class="discord-copy" data-handle="${esc(r.discord_name)}" title="Click to copy Discord handle">${esc(r.discord_name)}</span></span>` : '';
+      ? `<br><span class="col-discord"><span class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Click to copy Discord username">${esc(r.discord_name)}</span></span>` : '';
     return `
     <tr>
       <td class="col-char">${esc(r.player_name)}${discordPart}${altPart}</td>
@@ -467,10 +467,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!el) return;
     const handle = el.dataset.handle;
     navigator.clipboard.writeText(handle).then(() => {
-      const prev = el.textContent;
-      el.textContent = 'Copied!';
       el.classList.add('discord-copied');
-      setTimeout(() => { el.textContent = prev; el.classList.remove('discord-copied'); }, 1400);
+      setTimeout(() => el.classList.remove('discord-copied'), 1400);
     }).catch(() => {});
   });
 
