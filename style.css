@@ -197,6 +197,16 @@ tbody td {
 .col-char    { color: var(--gold-dim); font-size: 0.8rem; white-space: nowrap; }
 .col-alt     { color: var(--muted);    font-size: 0.75rem; }
 .col-discord { color: var(--muted);    font-size: 0.72rem; }
+
+.discord-copy {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  user-select: none;
+}
+.discord-copy:hover    { color: var(--text); }
+.discord-copied        { color: var(--gold) !important; text-decoration: none; }
 .col-noun    { color: var(--muted);    white-space: nowrap; }
 .col-name    { color: var(--text); }
 .col-loc     { color: var(--muted);    font-size: 0.8rem; white-space: nowrap; }

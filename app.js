@@ -302,7 +302,7 @@ function renderRows(rows) {
     const altPart = r.character && r.character !== r.player_name
       ? ` <span class="col-alt">(${esc(r.character)})</span>` : '';
     const discordPart = r.discord_name
-      ? `<br><span class="col-discord">${esc(r.discord_name)}</span>` : '';
+      ? `<br><span class="col-discord"><span class="discord-copy" data-handle="${esc(r.discord_name)}" title="Click to copy Discord handle">${esc(r.discord_name)}</span></span>` : '';
     return `
     <tr>
       <td class="col-char">${esc(r.player_name)}${discordPart}${altPart}</td>
@@ -459,6 +459,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Filter dropdowns auto-search on change
   ['location-filter', 'player-filter', 'price-filter', 'sort-by'].forEach(id => {
     document.getElementById(id).addEventListener('change', doSearch);
+  });
+
+  // Click-to-copy Discord handles
+  document.addEventListener('click', e => {
+    const el = e.target.closest('.discord-copy');
+    if (!el) return;
+    const handle = el.dataset.handle;
+    navigator.clipboard.writeText(handle).then(() => {
+      const prev = el.textContent;
+      el.textContent = 'Copied!';
+      el.classList.add('discord-copied');
+      setTimeout(() => { el.textContent = prev; el.classList.remove('discord-copied'); }, 1400);
+    }).catch(() => {});
   });
 
   loadStats();
