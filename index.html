@@ -17,10 +17,33 @@
 
   <main>
     <section class="search-bar">
-      <input id="query" type="text" placeholder="Search by name, noun, or location&hellip;" autocomplete="off">
-      <select id="location-filter"></select>
+      <input id="query" type="text" placeholder="Search items&hellip; try: ring OR band, -gem, noun:cloak, char:Mara" autocomplete="off">
       <button id="search-btn">Search</button>
     </section>
+
+    <div class="filter-row">
+      <select id="location-filter"></select>
+      <select id="player-filter">
+        <option value="">All Players</option>
+      </select>
+      <select id="price-filter">
+        <option value="">Any Price</option>
+        <option value="priced">Has Price Listed</option>
+        <option value="free">Free Only</option>
+      </select>
+      <select id="sort-by">
+        <option value="name-asc">Name A &rarr; Z</option>
+        <option value="name-desc">Name Z &rarr; A</option>
+        <option value="price-asc">Price: Low &rarr; High</option>
+        <option value="price-desc">Price: High &rarr; Low</option>
+        <option value="updated">Recently Updated</option>
+      </select>
+    </div>
+
+    <p class="search-hint">
+      Boolean: <code>ring OR band</code> &nbsp;&middot;&nbsp; <code>cloak NOT silk</code> &nbsp;&middot;&nbsp; <code>(ring OR band) neck</code>
+      &nbsp;&middot;&nbsp; Field scopes: <code>noun:ring</code> &nbsp;<code>loc:neck</code> &nbsp;<code>char:Mara</code>
+    </p>
 
     <div id="results-info" class="results-info"></div>
 
@@ -28,16 +51,17 @@
       <table>
         <thead>
           <tr>
-            <th>Character</th>
+            <th>Player</th>
             <th>Noun</th>
             <th>Full Name</th>
             <th>Worn Location</th>
+            <th>Price</th>
             <th>Notes</th>
             <th>Updated</th>
           </tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="6" class="empty-state">Loading&hellip;</td></tr>
+          <tr><td colspan="7" class="empty-state">Loading&hellip;</td></tr>
         </tbody>
       </table>
     </div>
