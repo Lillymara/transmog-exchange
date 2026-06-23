@@ -177,13 +177,12 @@ function evalBool(node, row) {
       const [, col, value] = node;
       const needle = value.toLowerCase();
       if (!col) {
-        return ['noun', 'full_name', 'worn_location', 'player_name', 'character', 'notes'].some(
+        return ['noun', 'full_name', 'worn_location', 'player_name', 'notes'].some(
           k => String(row[k] ?? '').toLowerCase().includes(needle)
         );
       }
       if (col === 'player_or_char') {
-        return String(row.player_name ?? '').toLowerCase().includes(needle) ||
-               String(row.character   ?? '').toLowerCase().includes(needle);
+        return String(row.player_name ?? '').toLowerCase().includes(needle);
       }
       return String(row[col] ?? '').toLowerCase().includes(needle);
     }
@@ -217,7 +216,7 @@ function needsClientMode() {
 function filterRows(rows) {
   const node    = isBoolQuery(state.query) ? parseBool(tokenizeBool(state.query)) : null;
   const simpleQ = (!isBoolQuery(state.query) && state.query) ? state.query.toLowerCase() : null;
-  const COLS    = ['noun', 'full_name', 'worn_location', 'player_name', 'character', 'notes'];
+  const COLS    = ['noun', 'full_name', 'worn_location', 'player_name', 'notes'];
 
   return rows.filter(r => {
     if (node    && !evalBool(node, r))                                   return false;
@@ -299,13 +298,11 @@ function renderRows(rows) {
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const altPart = r.character && r.character !== r.player_name
-      ? ` <span class="col-alt">(${esc(r.character)})</span>` : '';
     const discordPart = r.discord_name
       ? `<br><span class="col-discord"><span class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Click to copy Discord username">${esc(r.discord_name)}</span></span>` : '';
     return `
     <tr>
-      <td class="col-char">${esc(r.player_name)}${discordPart}${altPart}</td>
+      <td class="col-char">${esc(r.player_name)}${discordPart}</td>
       <td class="col-noun">${esc(r.noun)}</td>
       <td class="col-name">${esc(r.full_name)}</td>
       <td class="col-loc">${esc(r.worn_location)}</td>
