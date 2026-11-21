@@ -1,6 +1,5 @@
-// ── Supabase config ───────────────────────────────────────────────────────────
-const SUPABASE_URL      = 'https://tljiaclwqhbpdfiqkokh.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_arwIDUqEwZL-jdqN4n9lhQ_ot6ABKbi';
+// ── API (Cloudflare Worker, same origin: /transmog/api/) ─────────────────────
+const API = new URL('api/', document.baseURI).href;
 
 // ── Worn-location filter options ──────────────────────────────────────────────
 const LOCATIONS = [
@@ -41,33 +40,18 @@ let state = {
   _allRows:    null,  // cached rows for client-side mode
 };
 
-// ── Supabase helpers ──────────────────────────────────────────────────────────
+// ── API helpers ───────────────────────────────────────────────────────────────
 
-async function rpc(name, params = {}) {
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
-    method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'apikey':        SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-    body: JSON.stringify(params),
-  });
+async function apiGet(path, params = {}) {
+  const url = new URL(path, API);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== null && v !== undefined && v !== '') url.searchParams.set(k, v);
+  }
+  const resp = await fetch(url);
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`);
   }
-  return resp.json();
-}
-
-async function apiFetch(path) {
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      'apikey':        SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
 
@@ -194,7 +178,7 @@ function evalBool(node, row) {
 }
 
 // Returns true when the query contains boolean operators or field scopes.
-// Simple keyword searches (no operators) keep using fast server-side ILIKE.
+// Simple keyword searches (no operators) keep using fast server-side LIKE.
 function isBoolQuery(q) {
   if (!q) return false;
   return /\b(OR|NOT)\b/i.test(q)                                                            ||
@@ -330,7 +314,7 @@ function renderPagination() {
 
 async function loadStats() {
   try {
-    const [row]  = await rpc('get_catalog_stats');
+    const row     = await apiGet('stats');
     const items   = Number(row.total_items).toLocaleString();
     const players = Number(row.total_players);
     document.getElementById('stats').textContent =
@@ -343,10 +327,10 @@ async function loadStats() {
 
 async function loadPlayers() {
   try {
-    const players = await apiFetch('uploaders?select=character_name&order=character_name.asc');
+    const players = await apiGet('players');
     const sel = document.getElementById('player-filter');
     sel.innerHTML = '<option value="">All Players</option>' +
-      players.map(p => `<option value="${esc(p.character_name)}">${esc(p.character_name)}</option>`).join('');
+      players.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   } catch (e) {
     console.error('loadPlayers:', e);
   }
@@ -364,12 +348,7 @@ async function search() {
     if (needsClientMode()) {
       // ── Client-side mode: fetch all rows once, filter + sort in JS ──────────
       if (!state._allRows) {
-        state._allRows = await rpc('search_transmog', {
-          p_query:    null,
-          p_location: location || null,
-          p_limit:    10000,
-          p_offset:   0,
-        });
+        state._allRows = await apiGet('search', { loc: location, limit: 10000 });
       }
 
       const filtered = filterRows(state._allRows);
@@ -391,12 +370,7 @@ async function search() {
       // ── Server-side mode: ILIKE search with server pagination ───────────────
       state._allRows = null;
 
-      const rows = await rpc('search_transmog', {
-        p_query:    query    || null,
-        p_location: location || null,
-        p_limit:    PAGE_SIZE,
-        p_offset:   offset,
-      });
+      const rows = await apiGet('search', { q: query, loc: location, limit: PAGE_SIZE, offset });
 
       state.total = rows.length > 0 ? Number(rows[0].total_count) : 0;
       renderRows(rows);

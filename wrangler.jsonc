@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "transmog-exchange",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./site",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": ["/transmog/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "transmog-exchange",
+      "database_id": "0b8f7e94-887f-4e6a-9946-167ed345721b"
+    }
+  ],
+  "routes": [
+    { "pattern": "gs4.lmthings.com", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
+}

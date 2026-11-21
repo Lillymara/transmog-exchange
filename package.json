@@ -1,0 +1,13 @@
+{
+  "name": "transmog-exchange",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute transmog-exchange --remote --file=schema.sql",
+    "db:init:local": "wrangler d1 execute transmog-exchange --local --file=schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "4.166.0"
+  }
+}
