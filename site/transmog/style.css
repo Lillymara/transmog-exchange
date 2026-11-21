@@ -395,6 +395,67 @@ tbody td {
 }
 .discord-copy:hover { color: var(--text); }
 
+.buy-hint {
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.95rem;
+  margin-bottom: 0.9rem;
+  padding: 0.6rem 0.9rem;
+}
+.copy-tag-static { display: inline-block; line-height: 1.4; }
+
+.toast {
+  align-items: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  bottom: 1rem;
+  box-shadow: var(--shadow);
+  color: var(--text);
+  display: flex;
+  gap: 0.75rem;
+  left: 50%;
+  max-width: min(32rem, calc(100vw - 2rem));
+  opacity: 0;
+  padding: 0.8rem 0.8rem 0.8rem 1rem;
+  pointer-events: none;
+  position: fixed;
+  transform: translate(-50%, 1rem);
+  transition: opacity 0.2s, transform 0.2s;
+  width: max-content;
+  z-index: 50;
+}
+.toast.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+.toast p { font-size: 0.95rem; }
+.toast button {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+}
+.toast button:hover { color: var(--text); }
+
+.discord-label {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0 0.35rem;
+  text-transform: uppercase;
+}
+.discord-handle { color: var(--text); }
+
 .copy-tag {
   border: 1px solid var(--line);
   border-radius: 999px;

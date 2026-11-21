@@ -293,6 +293,26 @@ function copyText(text) {
   return fallback();
 }
 
+// A message at the bottom of the screen for a few seconds (also read aloud).
+// `html` must already be escaped.
+let toastTimer = null;
+function toast(html) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.className = 'toast';
+    el.setAttribute('role', 'status');
+    el.innerHTML = '<p></p><button type="button" aria-label="Close message">&times;</button>';
+    el.querySelector('button').addEventListener('click', () => el.classList.remove('show'));
+    document.body.append(el);
+  }
+  el.querySelector('p').innerHTML = html;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 9000);
+}
+
 // Short messages for screen readers (e.g. "Copied").
 function announce(text) {
   let el = document.getElementById('sr-announce');
@@ -326,7 +346,7 @@ function renderRows(rows) {
   }
   tbody.innerHTML = rows.map(r => {
     const discordPart = r.discord_name
-      ? `<button type="button" class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Copy Discord username ${esc(r.discord_name)}">${esc(r.discord_name)}<span class="copy-tag" aria-hidden="true">Copy</span></button>` : '';
+      ? `<button type="button" class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Copy Discord username ${esc(r.discord_name)}" title="Copy ${esc(r.player_name)}'s Discord name so you can message them"><span class="discord-label" aria-hidden="true">Discord</span><span class="discord-handle">${esc(r.discord_name)}</span><span class="copy-tag" aria-hidden="true">Copy</span></button>` : '';
     // data-label is shown as the field name in the phone card layout.
     const price = formatPrice(r.price);
     return `
@@ -612,12 +632,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tag) tag.textContent = 'Copy';
       }, ok ? 1600 : 2600);
     };
+    const seller = el.closest('td')?.querySelector('.player-name')?.dataset.player || 'the seller';
     copyText(handle).then(() => {
       show('Copied!', true);
-      announce(`Copied ${handle} to the clipboard.`);
+      toast(`Copied <strong>${esc(handle)}</strong>. Open Discord, choose <strong>Add Friend</strong>, paste the name, and message ${esc(seller)} about the item.`);
     }).catch(() => {
       show("Couldn't copy", false);
-      announce(`Could not copy. The Discord name is ${handle}.`);
+      toast(`Couldn't copy automatically. ${esc(seller)}'s Discord name is <strong>${esc(handle)}</strong>. Add them as a friend on Discord to message them.`);
     });
   });
 
