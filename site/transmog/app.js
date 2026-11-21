@@ -249,7 +249,8 @@ function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function timeAgo(isoString) {
@@ -271,6 +272,41 @@ function formatPrice(n) {
   return `${n.toLocaleString()} silvers`;
 }
 
+// Clipboard API first; older browsers and some embedded views only allow
+// the execCommand fallback.
+function copyText(text) {
+  const fallback = () => new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    ok ? resolve() : reject(new Error('copy failed'));
+  });
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).catch(fallback);
+  }
+  return fallback();
+}
+
+// Short messages for screen readers (e.g. "Copied").
+function announce(text) {
+  let el = document.getElementById('sr-announce');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sr-announce';
+    el.className = 'sr-only';
+    el.setAttribute('role', 'status');
+    document.body.append(el);
+  }
+  el.textContent = '';
+  setTimeout(() => { el.textContent = text; }, 50);
+}
+
 function setInfo(text) {
   document.getElementById('results-info').textContent = text;
 }
@@ -283,16 +319,16 @@ function renderRows(rows) {
   }
   tbody.innerHTML = rows.map(r => {
     const discordPart = r.discord_name
-      ? `<br><span class="col-discord"><span class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Click to copy Discord username">${esc(r.discord_name)}</span></span>` : '';
+      ? `<button type="button" class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Copy Discord username ${esc(r.discord_name)}">${esc(r.discord_name)}<span class="copy-tag" aria-hidden="true">Copy</span></button>` : '';
     return `
     <tr>
-      <td class="col-char">${esc(r.player_name)}${discordPart}</td>
+      <td class="col-char"><span class="player-name">${esc(r.player_name)}</span>${discordPart}</td>
       <td class="col-noun">${esc(r.noun)}</td>
       <td class="col-name">${esc(r.full_name)}</td>
       <td class="col-loc">${esc(r.worn_location)}</td>
       <td class="col-price">${formatPrice(r.price)}</td>
       <td class="col-notes">${esc(r.notes)}</td>
-      <td class="col-updated" title="${esc(r.last_upload)}">${timeAgo(r.last_upload)}</td>
+      <td class="col-updated"><time datetime="${esc(r.last_upload)}" title="${esc(new Date(r.last_upload).toLocaleString())}">${timeAgo(r.last_upload)}</time></td>
     </tr>`;
   }).join('');
 }
@@ -303,9 +339,9 @@ function renderPagination() {
   const page  = Math.floor(state.offset / PAGE_SIZE) + 1;
   if (pages <= 1) { pg.innerHTML = ''; return; }
   pg.innerHTML = `
-    <button id="pg-prev" ${page <= 1 ? 'disabled' : ''}>&#8592; Prev</button>
-    <span class="page-info">Page ${page} of ${pages}</span>
-    <button id="pg-next" ${page >= pages ? 'disabled' : ''}>Next &#8594;</button>`;
+    <button type="button" id="pg-prev" aria-label="Previous page" ${page <= 1 ? 'disabled' : ''}>&#8592; Prev</button>
+    <span class="page-info" aria-current="page">Page ${page} of ${pages}</span>
+    <button type="button" id="pg-next" aria-label="Next page" ${page >= pages ? 'disabled' : ''}>Next &#8594;</button>`;
   document.getElementById('pg-prev').addEventListener('click', () => changePage(-1));
   document.getElementById('pg-next').addEventListener('click', () => changePage(+1));
 }
@@ -329,7 +365,7 @@ async function loadPlayers() {
   try {
     const players = await apiGet('players');
     const sel = document.getElementById('player-filter');
-    sel.innerHTML = '<option value="">All Players</option>' +
+    sel.innerHTML = '<option value="">All players</option>' +
       players.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   } catch (e) {
     console.error('loadPlayers:', e);
@@ -418,13 +454,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Populate location dropdown
   const locSel = document.getElementById('location-filter');
   locSel.innerHTML = LOCATIONS.map(([label, val]) =>
-    `<option value="${esc(val)}">${esc(label)}</option>`
+    `<option value="${esc(val)}">${esc(label === 'All Locations' ? 'All locations' : label)}</option>`
   ).join('');
 
   // Wire up search controls
-  document.getElementById('search-btn').addEventListener('click', doSearch);
-  document.getElementById('query').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doSearch();
+  document.getElementById('search-form').addEventListener('submit', e => {
+    e.preventDefault();
+    doSearch();
   });
 
   // Filter dropdowns auto-search on change
@@ -437,10 +473,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const el = e.target.closest('.discord-copy');
     if (!el) return;
     const handle = el.dataset.handle;
-    navigator.clipboard.writeText(handle).then(() => {
-      el.classList.add('discord-copied');
-      setTimeout(() => el.classList.remove('discord-copied'), 1400);
-    }).catch(() => {});
+    const tag    = el.querySelector('.copy-tag');
+    const show = (text, ok) => {
+      el.classList.toggle('discord-copied', ok);
+      if (tag) tag.textContent = text;
+      setTimeout(() => {
+        el.classList.remove('discord-copied');
+        if (tag) tag.textContent = 'Copy';
+      }, ok ? 1600 : 2600);
+    };
+    copyText(handle).then(() => {
+      show('Copied!', true);
+      announce(`Copied ${handle} to the clipboard.`);
+    }).catch(() => {
+      show("Couldn't copy", false);
+      announce(`Could not copy. The Discord name is ${handle}.`);
+    });
   });
 
   loadStats();
