@@ -39,7 +39,8 @@
 
   const SYSTEM = 'system';
   const DEFAULT_ACCENT = 'antique';
-  const DEFAULT_BACKGROUND = 'midnight';
+  // Follows the visitor's device: Midnight in dark mode, Daylight in light mode.
+  const DEFAULT_BACKGROUND = SYSTEM;
   const ACCENT_KEY = 'transmog.accent';
   const BACKGROUND_KEY = 'transmog.background';
 

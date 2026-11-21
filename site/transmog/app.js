@@ -331,7 +331,7 @@ function renderRows(rows) {
     const price = formatPrice(r.price);
     return `
     <tr>
-      <td class="col-char" data-label="Player"><span class="player-name">${esc(r.player_name)}</span>${discordPart}</td>
+      <td class="col-char" data-label="Player"><button type="button" class="player-name" data-player="${esc(r.player_name)}" title="Show only ${esc(r.player_name)}'s items">${esc(r.player_name)}</button>${discordPart}</td>
       <td class="col-noun" data-label="Noun">${esc(r.noun)}</td>
       <td class="col-name" data-label="Item">${esc(r.full_name)}</td>
       <td class="col-loc" data-label="Worn">${esc(tidyLocation(r.worn_location))}</td>
@@ -376,29 +376,43 @@ async function loadPlayers() {
     const sel = document.getElementById('player-filter');
     sel.innerHTML = '<option value="">All players</option>' +
       players.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    setSelect('player-filter', state.player);  // keep a player chosen from the link
   } catch (e) {
     console.error('loadPlayers:', e);
   }
 }
 
+let searchSeq = 0;  // only the newest search may draw its results
+
 async function search() {
   const { query, location, offset } = state;
+  const seq = ++searchSeq;
+  const stale = () => seq !== searchSeq;
 
-  document.getElementById('results-body').innerHTML =
-    '<tr><td colspan="7" class="empty-state">Loading…</td></tr>';
-  setInfo('');
-  document.getElementById('pagination').innerHTML = '';
+  // Keep the current results on screen while the next ones load.
+  const table = document.getElementById('results');
+  table.setAttribute('aria-busy', 'true');
+  if (!document.querySelector('#results-body tr td:not(.empty-state)')) {
+    document.getElementById('results-body').innerHTML =
+      '<tr><td colspan="7" class="empty-state">Loading…</td></tr>';
+  }
+  setInfo('Searching…');
 
   try {
     if (needsClientMode()) {
-      // ── Client-side mode: fetch all rows once, filter + sort in JS ──────────
-      if (!state._allRows) {
-        state._allRows = await apiGet('search', { loc: location, limit: 10000 });
+      // ── Client-side mode: fetch all rows once per location, filter + sort in JS ─
+      if (!state._allRows || state._allRowsLoc !== location) {
+        const rows = await apiGet('search', { loc: location, limit: 10000 });
+        if (stale()) return;
+        state._allRows    = rows;
+        state._allRowsLoc = location;
       }
+      if (stale()) return;
 
       const filtered = filterRows(state._allRows);
       const sorted   = sortRows(filtered);
       state.total    = sorted.length;
+      if (clampPage()) return search();
       const page     = sorted.slice(offset, offset + PAGE_SIZE);
 
       renderRows(page);
@@ -412,11 +426,17 @@ async function search() {
       }
 
     } else {
-      // ── Server-side mode: ILIKE search with server pagination ───────────────
-      state._allRows = null;
-
+      // ── Server-side mode: LIKE search with server pagination ────────────────
       const rows = await apiGet('search', { q: query, loc: location, limit: PAGE_SIZE, offset });
+      if (stale()) return;
 
+      if (rows.length === 0 && offset > 0) {
+        // Past the end (e.g. an old link): count from the first page, then retry.
+        const first = await apiGet('search', { q: query, loc: location, limit: 1 });
+        if (stale()) return;
+        state.total = first.length ? Number(first[0].total_count) : 0;
+        if (clampPage()) return search();
+      }
       state.total = rows.length > 0 ? Number(rows[0].total_count) : 0;
       renderRows(rows);
 
@@ -432,18 +452,98 @@ async function search() {
 
     renderPagination();
   } catch (e) {
+    if (stale()) return;
     document.getElementById('results-body').innerHTML =
       `<tr><td colspan="7" class="empty-state">Error loading results: ${esc(e.message)}</td></tr>`;
+    setInfo('');
+    document.getElementById('pagination').innerHTML = '';
     console.error('search:', e);
+  } finally {
+    if (!stale()) table.removeAttribute('aria-busy');
   }
+}
+
+// If the page is past the end of the results, move to the last page.
+// Returns true when it moved (the caller then searches again).
+function clampPage() {
+  const last = Math.max(0, Math.floor((state.total - 1) / PAGE_SIZE) * PAGE_SIZE);
+  if (state.offset <= last) return false;
+  state.offset = last;
+  writeUrl();
+  return true;
 }
 
 function changePage(delta) {
   const newOffset = state.offset + delta * PAGE_SIZE;
   if (newOffset < 0 || newOffset >= state.total) return;
   state.offset = newOffset;
+  writeUrl();
   search();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  document.getElementById('results').focus({ preventScroll: true });
+}
+
+// ── Address bar: the current search lives in the URL so it can be shared ─────
+// e.g. /transmog/?q=cloak&loc=neck&player=Mara&price=free&sort=price-asc&page=2
+
+const URL_KEYS = { q: 'query', loc: 'location', player: 'player', price: 'priceFilter', sort: 'sortBy' };
+const DEFAULTS = { query: '', location: '', player: '', priceFilter: '', sortBy: 'name-asc' };
+
+function writeUrl() {
+  const p = new URLSearchParams();
+  for (const [key, field] of Object.entries(URL_KEYS)) {
+    if (state[field] && state[field] !== DEFAULTS[field]) p.set(key, state[field]);
+  }
+  const page = Math.floor(state.offset / PAGE_SIZE) + 1;
+  if (page > 1) p.set('page', page);
+  updatePlayerChip();
+  const qs = p.toString();
+  const url = location.pathname + (qs ? `?${qs}` : '') + location.hash;
+  if (url !== location.pathname + location.search + location.hash) history.replaceState(null, '', url);
+}
+
+function readUrl() {
+  const p = new URLSearchParams(location.search);
+  for (const [key, field] of Object.entries(URL_KEYS)) state[field] = p.get(key) ?? DEFAULTS[field];
+  const page = Math.max(1, parseInt(p.get('page'), 10) || 1);
+  state.offset = (page - 1) * PAGE_SIZE;
+}
+
+// Put the state into the form controls.
+function fillControls() {
+  document.getElementById('query').value = state.query;
+  setSelect('location-filter', state.location);
+  setSelect('player-filter', state.player);
+  setSelect('price-filter', state.priceFilter);
+  setSelect('sort-by', state.sortBy);
+}
+
+// Select a value, adding it as an option first if the list doesn't have it yet
+// (players load after the page, and old links may name someone who has left).
+function setSelect(id, value) {
+  const sel = document.getElementById(id);
+  if (value && ![...sel.options].some(o => o.value === value)) {
+    sel.add(new Option(value, value));
+  }
+  sel.value = value;
+}
+
+// "Only Mara's items ✕" chip next to the result count while a player is chosen.
+function updatePlayerChip() {
+  const chip = document.getElementById('clear-player');
+  chip.hidden = !state.player;
+  if (state.player) {
+    chip.innerHTML = `Only ${esc(state.player)}'s items <span aria-hidden="true">&times;</span>`;
+    chip.setAttribute('aria-label', `Showing only ${state.player}'s items. Show everyone's items`);
+  }
+}
+
+// Show only one seller's items (from clicking their name).
+function showPlayer(name) {
+  setSelect('player-filter', name);
+  doSearch();
+  announce(`Showing only items from ${name}.`);
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -455,8 +555,15 @@ function doSearch() {
   state.priceFilter = document.getElementById('price-filter').value;
   state.sortBy      = document.getElementById('sort-by').value;
   state.offset      = 0;
-  state._allRows    = null;  // clear cache so filters re-apply on next fetch
+  writeUrl();
   search();
+}
+
+// Typing searches after a short pause instead of on every key.
+let typingTimer = null;
+function searchSoon() {
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(doSearch, 300);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -469,7 +576,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // Wire up search controls
   document.getElementById('search-form').addEventListener('submit', e => {
     e.preventDefault();
+    clearTimeout(typingTimer);
     doSearch();
+  });
+  document.getElementById('query').addEventListener('input', searchSoon);
+  document.getElementById('clear-player').addEventListener('click', () => {
+    setSelect('player-filter', '');
+    doSearch();
+    announce("Showing everyone's items.");
+    document.getElementById('query').focus();
+  });
+
+  // Click a seller's name to see only their items
+  document.addEventListener('click', e => {
+    const el = e.target.closest('.player-name');
+    if (el) showPlayer(el.dataset.player);
   });
 
   // Filter dropdowns auto-search on change
@@ -500,6 +621,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  readUrl();
+  fillControls();
+  updatePlayerChip();
   loadStats();
   loadPlayers();
   search();
