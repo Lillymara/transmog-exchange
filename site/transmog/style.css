@@ -215,12 +215,11 @@ tbody td {
   color: var(--text);
   content: 'Click to copy Discord username';
   font-size: 0.72rem;
-  left: 50%;
+  left: 0;
   opacity: 0;
   padding: 3px 8px;
   pointer-events: none;
   position: absolute;
-  transform: translateX(-50%);
   transition: opacity 0.15s;
   white-space: nowrap;
   z-index: 10;
