@@ -41,6 +41,10 @@ npm run dev             # http://localhost:8787/transmog/
 npm run deploy          # needs `npx wrangler login`
 ```
 
+`npm run deploy` first copies the latest `transmog_inventory.lic` from
+`~/Lich5/scripts/custom/` into `site/transmog/`, so the site's download
+link always serves the current script (`npm run sync:lic` does just that step).
+
 `npm run db:init` applies `schema.sql` to the live database (safe to rerun).
 
 The `index.html` / `404.html` at the repo root are only a redirect for the

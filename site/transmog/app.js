@@ -307,6 +307,13 @@ function announce(text) {
   setTimeout(() => { el.textContent = text; }, 50);
 }
 
+// "Draped over your shoulders (6)" -> "Draped over your shoulders":
+// the number is the script's internal location code.
+function tidyLocation(s) {
+  const t = String(s ?? '').replace(/\s*\(\d+\)\s*$/, '').trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 function setInfo(text) {
   document.getElementById('results-info').textContent = text;
 }
@@ -320,15 +327,17 @@ function renderRows(rows) {
   tbody.innerHTML = rows.map(r => {
     const discordPart = r.discord_name
       ? `<button type="button" class="discord-copy" data-handle="${esc(r.discord_name)}" aria-label="Copy Discord username ${esc(r.discord_name)}">${esc(r.discord_name)}<span class="copy-tag" aria-hidden="true">Copy</span></button>` : '';
+    // data-label is shown as the field name in the phone card layout.
+    const price = formatPrice(r.price);
     return `
     <tr>
-      <td class="col-char"><span class="player-name">${esc(r.player_name)}</span>${discordPart}</td>
-      <td class="col-noun">${esc(r.noun)}</td>
-      <td class="col-name">${esc(r.full_name)}</td>
-      <td class="col-loc">${esc(r.worn_location)}</td>
-      <td class="col-price">${formatPrice(r.price)}</td>
-      <td class="col-notes">${esc(r.notes)}</td>
-      <td class="col-updated"><time datetime="${esc(r.last_upload)}" title="${esc(new Date(r.last_upload).toLocaleString())}">${timeAgo(r.last_upload)}</time></td>
+      <td class="col-char" data-label="Player"><span class="player-name">${esc(r.player_name)}</span>${discordPart}</td>
+      <td class="col-noun" data-label="Noun">${esc(r.noun)}</td>
+      <td class="col-name" data-label="Item">${esc(r.full_name)}</td>
+      <td class="col-loc" data-label="Worn">${esc(tidyLocation(r.worn_location))}</td>
+      <td class="col-price${price ? '' : ' is-empty'}" data-label="Price">${price}</td>
+      <td class="col-notes${r.notes ? '' : ' is-empty'}" data-label="Notes">${esc(r.notes)}</td>
+      <td class="col-updated" data-label="Updated"><time datetime="${esc(r.last_upload)}" title="${esc(new Date(r.last_upload).toLocaleString())}">${timeAgo(r.last_upload)}</time></td>
     </tr>`;
   }).join('');
 }

@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
+    "sync:lic": "f=\"$HOME/Lich5/scripts/custom/transmog_inventory.lic\"; if [ -f \"$f\" ]; then cp \"$f\" site/transmog/ && echo 'copied latest transmog_inventory.lic'; else echo 'script not found, keeping site copy'; fi",
+    "predeploy": "npm run -s sync:lic",
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute transmog-exchange --remote --file=schema.sql",
     "db:init:local": "wrangler d1 execute transmog-exchange --local --file=schema.sql"

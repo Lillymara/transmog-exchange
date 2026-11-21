@@ -18,6 +18,7 @@
       <h1>Transmog Exchange</h1>
       <p class="subtitle">Community transmog catalog for Gemstone IV</p>
       <p id="stats" class="stats">Loading catalog&hellip;</p>
+      <a class="howto-link" href="#list-your-items">List your own items &darr;</a>
     </div>
   </header>
 
@@ -59,10 +60,16 @@
       </label>
     </div>
 
-    <p class="search-hint">
-      Search tips: <code>ring OR band</code> &middot; <code>cloak NOT silk</code> &middot; <code>(ring OR band) neck</code>
-      &middot; only one field: <code>noun:ring</code> <code>loc:neck</code> <code>char:Mara</code>
-    </p>
+    <details class="search-tips">
+      <summary>Search tips</summary>
+      <ul>
+        <li><code>ring OR band</code> finds either word</li>
+        <li><code>cloak NOT silk</code> or <code>cloak -silk</code> leaves out silk cloaks</li>
+        <li><code>(ring OR band) gold</code> groups words with brackets</li>
+        <li><code>"black silk"</code> matches the exact phrase</li>
+        <li>Search one field only: <code>noun:ring</code> &middot; <code>loc:neck</code> &middot; <code>name:dragon</code> &middot; <code>char:Mara</code> (player)</li>
+      </ul>
+    </details>
 
     <p id="results-info" class="results-info" role="status" aria-live="polite"></p>
 
@@ -87,6 +94,35 @@
     </div>
 
     <nav id="pagination" class="pagination" aria-label="Result pages"></nav>
+
+    <section id="list-your-items" class="howto" aria-labelledby="howto-title" tabindex="-1">
+      <h2 id="howto-title">List your own items</h2>
+      <p>The <strong>transmog_inventory</strong> Lich script reads your locker and puts your transmog items here. Prices and notes are optional.</p>
+      <ol>
+        <li>
+          <strong>Get the script.</strong>
+          <a class="button-link" href="transmog_inventory.lic" download>Download transmog_inventory.lic</a>
+          and save it in your Lich <code>scripts</code> folder.
+        </li>
+        <li>
+          <strong>Scan your items.</strong> Stand at your open locker with a free hand and type
+          <code>;transmog_inventory</code>. Do this on each character you want to include.
+        </li>
+        <li>
+          <strong>Pick the name buyers will see.</strong>
+          <code>;transmog_inventory setname YourName discord:your.handle</code>
+          (the Discord part is optional, but it lets people contact you).
+        </li>
+        <li>
+          <strong>Publish.</strong> <code>;transmog_inventory upload</code>. Run it again whenever your items change.
+        </li>
+      </ol>
+      <p class="howto-more">
+        Set a price with <code>;transmog_inventory price &lt;id&gt; 25k</code> (or <code>free</code>), add a note with
+        <code>;transmog_inventory note &lt;id&gt; &lt;text&gt;</code>, and take your listing down with
+        <code>;transmog_inventory clearweb confirm</code>. <code>;transmog_inventory help</code> lists everything.
+      </p>
+    </section>
   </main>
 
   <footer>

@@ -249,16 +249,35 @@ input, select, button { font: inherit; }
 }
 .filter select:focus { border-color: var(--accent); }
 
-/* ── Search hint ────────────────────────────────────────────────────────── */
+/* ── Search tips ────────────────────────────────────────────────────────── */
 
-.search-hint {
+.search-tips {
   color: var(--muted);
-  font-size: 0.875rem;
-  line-height: 1.9;
+  font-size: 0.9rem;
   margin-bottom: 0.9rem;
 }
+.search-tips summary {
+  color: var(--accent-text);
+  cursor: pointer;
+  font-weight: 600;
+  width: fit-content;
+}
+.search-tips ul {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.35rem;
+  list-style: none;
+  margin-top: 0.5rem;
+  padding: 0.75rem 1rem;
+}
 
-.search-hint code {
+code {
+  overflow-wrap: anywhere;
+}
+
+.search-tips code, .howto code {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -266,7 +285,6 @@ input, select, button { font: inherit; }
   font-family: ui-monospace, monospace;
   font-size: 0.85rem;
   padding: 1px 5px;
-  white-space: nowrap;
 }
 
 /* ── Results info ───────────────────────────────────────────────────────── */
@@ -395,6 +413,43 @@ tbody td {
 .pagination button:disabled { cursor: default; opacity: 0.45; }
 .pagination .page-info      { color: var(--muted); font-size: 0.9rem; }
 
+/* ── How to list your items ─────────────────────────────────────────────── */
+
+.howto-link {
+  color: var(--accent-text);
+  display: inline-block;
+  font-weight: 600;
+  margin-top: 0.6rem;
+}
+.howto-link:hover { color: var(--text); }
+
+.howto {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-top: 2rem;
+  padding: 1.25rem 1.5rem;
+  scroll-margin-top: 1rem;
+}
+.howto:focus { outline: none; }
+.howto h2 { color: var(--accent-text); font-size: 1.3rem; margin-bottom: 0.4rem; }
+.howto p  { color: var(--text); }
+.howto ol { display: grid; gap: 0.75rem; margin: 1rem 0; padding-left: 1.4rem; }
+.howto li::marker { color: var(--accent-text); font-weight: 700; }
+.howto-more { color: var(--muted) !important; font-size: 0.9rem; }
+
+.button-link {
+  background: var(--accent);
+  border-radius: var(--radius);
+  color: var(--on-accent);
+  display: inline-block;
+  font-weight: 700;
+  margin: 0.25rem 0;
+  padding: 0.35rem 0.9rem;
+  text-decoration: none;
+}
+.button-link:hover { background: var(--accent-2); }
+
 /* ── Footer ─────────────────────────────────────────────────────────────── */
 
 footer {
@@ -416,4 +471,78 @@ footer a:hover       { color: var(--text); }
   h1          { font-size: 1.65rem; }
   main        { padding: 1rem; }
   .filter-row { grid-template-columns: 1fr 1fr; }
+  .howto      { padding: 1rem; }
+}
+
+/* Phones and narrow windows: each item becomes a card instead of a table row. */
+@media (max-width: 760px) {
+  .table-wrap { background: none; border: none; overflow: visible; }
+  table, tbody { display: block; }
+  thead { display: none; }
+
+  tbody tr {
+    background: var(--surface);
+    border: 1px solid var(--line) !important;
+    border-radius: var(--radius);
+    display: grid;
+    gap: 0.2rem 0.75rem;
+    grid-template-columns: auto 1fr;
+    margin-bottom: 0.75rem;
+    padding: 0.8rem 0.9rem;
+  }
+  tbody tr:hover { background: var(--surface); }
+
+  /* Label + value pairs */
+  tbody td {
+    display: contents;
+  }
+  tbody td::before {
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding-top: 0.1rem;
+  }
+  tbody td.is-empty { display: none; }
+  .price-free { justify-self: start; }
+  tbody td.col-name, tbody td.col-char { padding-left: 0; padding-right: 0; }
+  tbody td.col-name { padding-top: 0; padding-bottom: 0; }
+  tbody td.col-char { padding-bottom: 0; }
+
+  /* Item name across the top, larger, no label */
+  tbody td.col-name {
+    display: block;
+    font-size: 1.05rem;
+    font-weight: 600;
+    grid-column: 1 / -1;
+    margin-bottom: 0.35rem;
+    min-width: 0;
+    order: -2;
+  }
+  tbody td.col-name::before { display: none; }
+
+  /* Seller at the bottom, with the Copy button */
+  tbody td.col-char {
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    align-items: center;
+    grid-column: 1 / -1;
+    margin-top: 0.45rem;
+    order: 10;
+    padding-top: 0.55rem;
+    white-space: normal;
+  }
+  tbody td.col-char::before { display: none; }
+  .player-name { display: inline; }
+  .discord-copy { min-height: 2.25rem; }
+  .copy-tag { padding: 0.15rem 0.7rem; }
+
+  .col-noun, .col-loc, .col-price, .col-updated { white-space: normal; }
+  .col-notes { max-width: none; }
+
+  tbody td.empty-state { display: block; grid-column: 1 / -1; }
+  tbody td.empty-state::before { display: none; }
+  tbody tr:has(.empty-state) { display: block; }
 }

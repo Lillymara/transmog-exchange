@@ -1,0 +1,1629 @@
+=begin
+  transmog_inventory - catalog transmog items across your alts
+  (every command below starts with  ;transmog_inventory)
+
+  SCAN
+    [container]            scan and merge (default: chest)
+    new [container]        wipe THIS alt's items, rescan
+    [container] debug      raw ANALYZE/INSPECT, 2 items
+
+  FIND AND EDIT
+    search <query>         search the catalog
+    gui                    point-and-click browser
+    remove <id|query>      remove an entry
+    note <id> <text>       add a note, or 'clear'
+    price <id> <amount>    asking price: 25k, 2m, free
+
+  TRANSMOG EXCHANGE
+    setname <name>         your display name
+    upload                 publish your catalog
+    clearweb confirm       remove your web listing
+
+  MORE HELP
+    help                   this list, in color
+    help search            boolean syntax, field prefixes
+    help price             prices, notes, the Exchange
+
+  Stand at your open locker (or wear/hold the container)
+  with at least one free hand before scanning.
+
+       author: Mara
+         game: Gemstone
+         tags: transmog, inventory, locker, items
+      contact: mara.lilly on Discord, @Lillymara on GitHub
+    co-author: Claude (Anthropic) - claude.ai/code
+      version: 2.2.0
+
+  Changelog:
+    2.2.0 (2026-11-21) - The Transmog Exchange moved to gs4.lmthings.com/transmog
+                         (the old Supabase database was shut down). Upload again
+                         to relist your items.
+    2.1.2 (2026-10-09) - Bugfixes: "new" only wipes the scanning alt's items; notes
+                         set by ID no longer hit other alts' same-named items; GUI
+                         edits saved safely. Catalog writes are locked and atomic.
+                         Color-coded help with topics (help search, help price).
+    2.1.1 (2026-06-29) - Bugfix: GUI delete no longer disconnects from game.
+    2.1.0 (2026-06-27) - GUI browser (;transmog gui): searchable point-and-click
+                         window with inline price/note editing and multi-select delete.
+                         Bugfix: remove/rm now accepts a numeric item ID directly.
+    2.0.0 (2026-06-21) - Shared CSV across alts with Character column; setname,
+                         price, and char: search commands; upload uses display name.
+    1.4.0 (2026-06-18) - Full boolean search syntax for search/remove/note.
+    1.3.0 (2026-06-17) - "note" command with stable numeric item IDs.
+    1.2.0 (2026-06-17) - "upload" command to Transmog Exchange (Supabase).
+    1.1.1 (2026-05-31) - Bugfix: item return in ensure block; quantity persistence.
+    1.1.0 (2026-05-31) - Merge mode, "new" fresh-scan, "remove" command.
+    1.0.0 (2026-05-31) - Initial release.
+=end
+
+require 'csv'
+require 'net/http'
+require 'openssl'
+require 'json'
+require 'securerandom'
+
+# Changelog:
+# 2.1.2 (2026-10-09)
+#   - Bugfix: "new" (fresh scan) wiped every alt's entries from the shared CSV.
+#     It now replaces only the scanning character's rows.
+#   - Bugfix: note by ID matched on Full Name alone, so it also changed another
+#     alt's item with the same name. Now targets the exact entry.
+#   - Bugfix: GUI Price/Note edits wrote the CSV from the GTK thread (same
+#     disconnect risk fixed for Delete in 2.1.1), and a change made just before
+#     closing the window could be lost. All GUI edits are now queued and saved by
+#     the script thread, including a final flush after the window closes.
+#   - Catalog read-modify-write is guarded by a lock file, so alts running
+#     commands at the same time no longer overwrite each other's changes.
+#   - CSV is written to a temp file then renamed, so a crash mid-save can't
+#     leave a half-written catalog.
+#   - Help output is color-coded to match my other scripts, with topic pages:
+#     ;transmog_inventory help search / help price.
+#
+# 2.1.1 (2026-06-29/30)
+#   - Bugfix: GUI "Delete Selected" was disconnecting from game. Root causes:
+#     (1) respond() on GTK thread interfered with Lich game socket -> removed.
+#     (2) write_catalog() on GTK thread -> moved to script thread via pending_write.
+#     (3) Gtk::TreeSelection#selected_foreach does not exist in GI-based ruby-gtk3
+#         4.3.6 -> switched to selected_rows with format detection ([paths,model] in
+#         GI vs plain array in older bindings), fresh iters via store.get_iter(path).
+#     (4) Any remaining Ruby exceptions in the handler now caught by rescue and shown
+#         in the status bar instead of escaping into the GLib event loop and killing
+#         the Lich socket connection.
+#   - Bugfix: segfault on GUI close -- Ruby GC finalizing GTK wrappers on non-GTK
+#     thread (rb_objspace_call_finalizer -> g_object_unref -> gtk_tree_view crash).
+#     Fixed by pinning all GTK wrapper objects in gtk_refs (scoped to run_gui) and
+#     extracting Gtk::TreeSelection into sel so it is also pinned.
+#
+# 2.1.0 (2026-06-27)
+#   - New "gui" command (aliases: browse, ui): opens a GTK3 point-and-click browser.
+#     Search box filters in real-time (same boolean syntax as the command line).
+#     Price and Note columns are editable inline -- click a cell and type.
+#     Multi-select rows and click Delete Selected to remove them from the catalog.
+#     Widget creation runs via GLib::Idle.add on the GTK main thread to avoid the
+#     "Not Responding" freeze that occurs when GTK is driven from a script thread.
+#   - Bugfix: remove/rm now accepts a bare numeric item ID (e.g. ;transmog rm 154876914)
+#     without needing to match it through the boolean text search, which excluded
+#     the id field.
+#
+# 2.0.0 (2026-06-21)
+#   - Single CSV per Lich install (transmog_inventory.csv) instead of one per
+#     character. Scans from any alt are merged in; a "Character" column records
+#     which alt owns each entry. Dedup key is now (full name + character).
+#   - On first run, any old per-character CSVs in the transmog/ folder are
+#     auto-imported into the new shared file.
+#   - New "setname" command: choose your display name for the Transmog Exchange
+#     (main character name, preferred alias, and/or Discord handle).
+#     ;transmog_inventory setname Mara
+#     ;transmog_inventory setname Mara discord:mara.lilly
+#   - New "price" command: tag items with an asking price in silvers.
+#     Supports shorthand (25k, 2m), "free" (0 silvers), and "clear".
+#     Price = 0 / "free" appears as "Free" on the Transmog Exchange.
+#     ;transmog_inventory price <id> 25000
+#     ;transmog_inventory price <id> free
+#     ;transmog_inventory price <id> clear
+#   - Upload now uses player display name instead of character name, sends
+#     discord_name, per-item price and character (alt). Display name is required
+#     before uploading (set with setname first).
+#   - Search/remove/note support new char:/c:/character: field prefix.
+#   - CSV format updated: added Character and Price columns (backward-compatible
+#     read of old per-character files).
+#
+# 1.4.0 (2026-06-18)
+#   - Added full boolean search syntax to search, remove, and note commands.
+#
+# 1.3.0 (2026-06-17)
+#   - Added "note" command with stable numeric item IDs.
+#
+# 1.2.0 (2026-06-17)
+#   - Added "upload" command to push catalog to the Transmog Exchange.
+#
+# 1.1.1 (2026-05-31)
+#   - Bugfix: items returned in ensure block; quantity persisted to CSV.
+#
+# 1.1.0 (2026-05-31)
+#   - Merge mode, "new" fresh-scan, "remove" command, shared catalog reader/writer.
+#
+# 1.0.0 (2026-05-31)
+#   - Initial release.
+
+# Candidate Lich item types that can ever be a transmog item.
+TRANSMOG_TYPES = /jewelry|clothing|armor|weapon|uncommon/i
+TRANSMOG_LINE  = /transfer its appearance onto another compatible worn item/i
+
+# Maps an INSPECT "you could wear ..." phrase onto a canonical worn location
+# and its game code. Ordered most-specific first; first matching regex wins.
+#   [regex, canonical location label, location code]
+SLOT_MAP = [
+  [/slipped into,? on your chest|into,? on your chest|as a gambeson|as an undershirt/i, "Slipped into, on your chest", 23],
+  [/over your chest|around your chest|on your chest|covers? the torso|as armor/i,       "Over your chest", 8],
+  [/slipped into,? on your legs|as leggings/i,                                          "Slipped into, on your legs", 24],
+  [/attached to your legs|attaching it to your legs|as leg greaves/i,                   "Attached to your legs", 15],
+  [/pulled over your legs|on your legs|over your legs|as pants|as trousers|as a skirt/i, "Pulled over your legs", 7],
+  [/slipped on your feet|on your feet,? as socks|as socks|as stockings/i,               "Slipped on your feet", 21],
+  [/on your feet|on a foot|as boots|as shoes|as sandals|as slippers/i,                  "On your feet", 11],
+  [/from both ears|from your ears|as a pair of earrings/i,                              "Hung from both ears", 17],
+  [/from (?:a |one |your |an )?(?:single )?ear|as a single earring|as an earring/i,     "Hung from a single ear", 16],
+  [/around your neck|around the neck|hung around your neck|as a necklace/i,             "Hung around your neck", 12],
+  [/draped (?:over|from) your shoulders|hanging it from your shoulders|hanging from your shoulders|over your shoulders|as a cloak/i, "Draped over your shoulders", 6],
+  [/slinging it across your shoulders and back|slung (?:over|across) your shoulder|as a shield/i, "Slung over your shoulder", 5],
+  [/on your back|as a backpack/i,                                                       "On your back", 2],
+  [/attached to your arms|attaching it to your arms|around your arms|as arm greaves|on your arms|over your arms|as armbands?|as bracers?/i, "Attached to your arms", 14],
+  [/attached to your wrist|attaching it to your wrist|around your wrist|on your wrist|as a bracelet|as a wristlet/i, "Attached to your wrist", 9],
+  [/slipped over your hands|over your hands|on your hands|as gloves/i,                  "Slipped over your hands", 20],
+  [/on (?:a|your) fingers?|around your fingers?|onto a finger|as a ring/i,              "On your fingers", 10],
+  [/around your waist|as a belt|as a sash/i,                                            "Around your waist", 3],
+  [/attached to your belt|attaching it to your belt|as a belt pouch/i,                  "Attached to your belt", 13],
+  [/attached to your ankle|attaching it to your ankle|around your ankle|on your ankle|as an anklet/i, "Attached to your ankle", 18],
+  [/put over your front|over your front|as an apron/i,                                  "Put over your front", 19],
+  [/placed in your hair|in your hair|as a barrette/i,                                   "Placed in your hair", 22],
+  [/on (?:top of )?your head|atop your head|over your head|as a (?:hat|helm|crown|circlet)/i, "On your head", 4],
+  [/as a pin|pin-worn|on your body/i,                                                   "As a pin", 1],
+]
+
+# ---------------------------------------------------------------------------
+# Transmog Exchange - https://github.com/Lillymara/transmog-exchange
+EXCHANGE_WEB_URL  = "https://gs4.lmthings.com/transmog/".freeze
+EXCHANGE_API_URL  = "#{EXCHANGE_WEB_URL}api".freeze
+
+NOTE_MAX_CHARS = 120
+PRICE_CLEAR    = :clear
+
+# ---------------------------------------------------------------------------
+# Paths
+
+def transmog_dir
+  scripts_dir = ($script_dir rescue nil) || (SCRIPT_DIR rescue nil) || Dir.pwd
+  File.join(scripts_dir, "transmog")
+end
+
+# Single shared CSV - no character suffix.
+def csv_path
+  File.join(transmog_dir, "transmog_inventory.csv")
+end
+
+def config_path
+  File.join(transmog_dir, "transmog_config.json")
+end
+
+# ---------------------------------------------------------------------------
+# Help
+
+def xml_safe(s)
+  s.to_s.gsub('&', '&amp;').gsub('<', '&lt;')
+end
+
+# Keep every line under ~62 columns: a description that overflows wraps to
+# column 0 in the client and breaks the two-column layout.
+def usage(topic = nil)
+  # Pad before escaping - placeholders like <id> are literal text, not markup.
+  hdr = ->(t) { _respond "<preset id='speech'>#{xml_safe(t)}</preset>" }
+  txt = ->(t) { _respond "  #{xml_safe(t)}" }
+  gap = -> { _respond " " }
+  row = ->(c, d) { _respond "  <preset id='whisper'>#{xml_safe(c.ljust(23))}</preset>#{xml_safe(d)}" }
+  title = lambda do |t|
+    hdr.call("transmog_inventory - #{t}")
+    txt.call("(every command below starts with  ;transmog_inventory)")
+    gap.call
+  end
+
+  case topic.to_s.downcase
+  when /\A(?:search|find|query|syntax)/
+    title.call("searching")
+    hdr.call("  QUERY SYNTAX")
+    row.call("search neck",             "any column contains neck")
+    row.call("search ring OR band",     "either term")
+    row.call("search NOT ring",         "exclude ring (or -ring)")
+    row.call("search \"twisted ring\"", "exact phrase")
+    row.call("search (ring OR band) ...", "group with parentheses")
+    gap.call
+    hdr.call("  FIELD PREFIXES")
+    row.call("noun:  n:",               "Noun column")
+    row.call("name:  full:  f:",        "Full Name")
+    row.call("loc:  worn:  l:",         "Worn Location")
+    row.call("char:  c:",               "which alt owns it")
+    gap.call
+    hdr.call("  SAME SYNTAX ELSEWHERE")
+    row.call("remove <query>",          "remove one match")
+    row.call("remove all <query>",      "remove every match")
+    row.call("note <query> -- <text>",  "note by search, not ID")
+    row.call("price <query> -- <amt>",  "price by search, not ID")
+
+  when /\A(?:price|note|sell|exchange|upload)/
+    title.call("prices, notes and the Exchange")
+    hdr.call("  PRICE")
+    row.call("price <id> 25000",        "exact silvers")
+    row.call("price <id> 25k",          "shorthand (k or m)")
+    row.call("price <id> free",         "list as Free")
+    row.call("price <id> clear",        "remove the price")
+    row.call("price all <amount>",      "every item at once")
+    gap.call
+    hdr.call("  NOTE")
+    row.call("note <id> <text>",        "max #{NOTE_MAX_CHARS} characters")
+    row.call("note <id> clear",         "remove the note")
+    gap.call
+    hdr.call("  TRANSMOG EXCHANGE")
+    row.call("setname Mara",            "your display name")
+    row.call("setname Mara discord:x",  "with a Discord handle")
+    row.call("setname",                 "show current settings")
+    row.call("upload",                  "publish your catalog")
+    row.call("clearweb confirm",        "remove your web listing")
+    gap.call
+    txt.call("Run upload after any change to publish it.")
+    txt.call("Browse: #{EXCHANGE_WEB_URL}")
+
+  else
+    title.call("catalog transmog items across your alts")
+    hdr.call("  SCAN")
+    row.call("[container]",             "scan and merge (default: chest)")
+    row.call("new [container]",         "wipe THIS alt's items, rescan")
+    row.call("[container] debug",       "raw ANALYZE/INSPECT, 2 items")
+    gap.call
+    hdr.call("  FIND AND EDIT")
+    row.call("search <query>",          "search the catalog")
+    row.call("gui",                     "point-and-click browser")
+    row.call("remove <id|query>",       "remove an entry")
+    row.call("note <id> <text>",        "add a note, or 'clear'")
+    row.call("price <id> <amount>",     "asking price: 25k, 2m, free")
+    gap.call
+    hdr.call("  TRANSMOG EXCHANGE")
+    row.call("setname <name>",          "your display name")
+    row.call("upload",                  "publish your catalog")
+    row.call("clearweb confirm",        "remove your web listing")
+    gap.call
+    hdr.call("  MORE HELP")
+    row.call("help search",             "boolean syntax, field prefixes")
+    row.call("help price",              "prices, notes, the Exchange")
+    gap.call
+    txt.call("Stand at your open locker (or wear/hold the container)")
+    txt.call("with at least one free hand before scanning.")
+    gap.call
+    rows  = read_catalog
+    chars = rows.map { |r| r[:character] }.reject(&:empty?).uniq.size
+    name  = load_config["player_name"].to_s.strip
+    txt.call("Now: #{rows.size} items, #{chars} alt(s), display name #{name.empty? ? 'NOT SET' : name}")
+    txt.call("CSV: #{csv_path}")
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Catalog I/O
+
+def read_catalog
+  path = csv_path
+  return [] unless File.exist?(path)
+  CSV.read(path, headers: true).map do |r|
+    qty = r["Quantity"].to_s.strip
+    qty = qty =~ /\A\d+\z/ ? qty.to_i : 1
+    qty = 1 if qty < 1
+    raw_id    = r["ID"].to_s.strip
+    raw_price = r["Price"].to_s.strip
+    {
+      id:        raw_id    =~ /\A\d+\z/ ? raw_id.to_i    : nil,
+      character: r["Character"].to_s.strip,
+      noun:      r["Noun"].to_s,
+      name:      r["Full Name"].to_s,
+      location:  r["Worn Location"].to_s,
+      quantity:  qty,
+      note:      r["Notes"].to_s.strip,
+      price:     raw_price =~ /\A\d+\z/ ? raw_price.to_i : nil,
+    }
+  end
+end
+
+def generate_unique_id(existing_ids)
+  loop do
+    n = rand(100_000_000..999_999_999)
+    return n unless existing_ids.include?(n)
+  end
+end
+
+def write_catalog(rows)
+  existing_ids = rows.map { |r| r[:id] }.compact.to_set
+  rows = rows.map do |r|
+    next r if r[:id].to_i > 0
+    id = generate_unique_id(existing_ids)
+    existing_ids << id
+    r.merge(id: id)
+  end
+
+  FileUtils.mkdir_p(File.dirname(csv_path))
+  # Write to a temp file and rename over the real one, so a crash mid-save
+  # leaves the old catalog intact instead of a half-written one.
+  tmp = "#{csv_path}.tmp"
+  CSV.open(tmp, "w") do |csv|
+    csv << ["ID", "Character", "Noun", "Full Name", "Worn Location", "Quantity", "Notes", "Price"]
+    rows.each do |r|
+      qty = [r[:quantity].to_i, 1].max
+      csv << [r[:id], r[:character].to_s, r[:noun], r[:name], r[:location], qty, r[:note].to_s, r[:price]]
+    end
+  end
+  File.rename(tmp, csv_path)
+  csv_path
+end
+
+# Serialises read-modify-write of the shared CSV across alts (each Lich session
+# is its own process). Wrap the whole read..write, not just the write.
+# ponytail: one global lock held for the whole command; commands are quick, and
+# a scan only takes it for the final merge. Not re-entrant: never nest calls.
+def with_catalog_lock
+  FileUtils.mkdir_p(transmog_dir)
+  File.open("#{csv_path}.lock", File::RDWR | File::CREAT) do |f|
+    f.flock(File::LOCK_EX)
+    yield
+  end
+end
+
+# One-time migration: if the new shared CSV doesn't exist yet but old per-character
+# CSVs do, import them automatically.
+def migrate_old_csvs
+  return if File.exist?(csv_path)
+  dir = transmog_dir
+  return unless Dir.exist?(dir)
+  old_files = Dir.glob(File.join(dir, "transmog_inventory_*.csv"))
+  return if old_files.empty?
+
+  all_rows = []
+  old_files.each do |f|
+    char_name = File.basename(f, ".csv").sub(/\Atransmog_inventory_/, "")
+    begin
+      CSV.read(f, headers: true).each do |r|
+        qty = r["Quantity"].to_s.strip
+        qty = qty =~ /\A\d+\z/ ? qty.to_i : 1
+        qty = 1 if qty < 1
+        raw_id = r["ID"].to_s.strip
+        all_rows << {
+          id:        raw_id =~ /\A\d+\z/ ? raw_id.to_i : nil,
+          character: char_name,
+          noun:      r["Noun"].to_s,
+          name:      r["Full Name"].to_s,
+          location:  r["Worn Location"].to_s,
+          quantity:  qty,
+          note:      r["Notes"].to_s.strip,
+          price:     nil,
+        }
+      end
+    rescue => e
+      respond "transmog_inventory: could not import #{File.basename(f)}: #{e.message}"
+    end
+  end
+
+  if all_rows.any?
+    write_catalog(all_rows)
+    respond "transmog_inventory: imported #{all_rows.size} item(s) from #{old_files.size} old catalog file(s) into #{csv_path}"
+    respond "  Old files preserved. Set your display name: ;transmog_inventory setname <name>"
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Boolean query parser
+#
+# Grammar (precedence: NOT > AND > OR):
+#   expr     := or_expr
+#   or_expr  := and_expr (OR and_expr)*
+#   and_expr := not_expr ((AND | implicit) not_expr)*
+#   not_expr := (NOT | -) primary | primary
+#   primary  := '(' expr ')' | term
+
+def parse_search_term(token)
+  if token =~ /\A(noun|n|name|full|f|loc|location|worn|l|char|character|c)[:=](.+)\z/i
+    field = Regexp.last_match(1).downcase
+    value = Regexp.last_match(2)
+    col = case field
+          when "noun", "n"                    then :noun
+          when "name", "full", "f"            then :name
+          when "char", "character", "c"       then :character
+          else                                     :location
+          end
+    [col, value]
+  else
+    [nil, token]
+  end
+end
+
+def tokenize_bool(query)
+  tokens = []
+  s = query.to_s.strip
+  until s.empty?
+    s = s.lstrip
+    break if s.empty?
+    case s
+    when /\A\(/          then tokens << { type: :lparen };            s = $'
+    when /\A\)/          then tokens << { type: :rparen };            s = $'
+    when /\A-(?=\S)/     then tokens << { type: :not };               s = $'
+    when /\AAND\b/i      then tokens << { type: :and };               s = $'
+    when /\AOR\b/i       then tokens << { type: :or };                s = $'
+    when /\ANOT\b/i      then tokens << { type: :not };               s = $'
+    when /\A"((?:[^"\\]|\\.)*)"/
+      tokens << { type: :word, value: $1 }; s = $'
+    when /\A(\S+)/
+      tokens << { type: :word, value: $1 }; s = $'
+    end
+  end
+  tokens
+end
+
+def parse_bool(tokens)
+  node, _ = _bool_or(tokens, 0)
+  node
+end
+
+def _bool_or(tokens, pos)
+  left, pos = _bool_and(tokens, pos)
+  while tokens[pos]&.[](:type) == :or
+    pos += 1
+    right, pos = _bool_and(tokens, pos)
+    left = [:or, left, right]
+  end
+  [left, pos]
+end
+
+def _bool_and(tokens, pos)
+  left, pos = _bool_not(tokens, pos)
+  loop do
+    tok = tokens[pos]
+    break unless tok
+    if tok[:type] == :and
+      pos += 1
+      right, pos = _bool_not(tokens, pos)
+      left = [:and, left, right]
+    elsif %i[word not lparen].include?(tok[:type])
+      right, pos = _bool_not(tokens, pos)
+      left = [:and, left, right]
+    else
+      break
+    end
+  end
+  [left, pos]
+end
+
+def _bool_not(tokens, pos)
+  if tokens[pos]&.[](:type) == :not
+    child, pos = _bool_primary(tokens, pos + 1)
+    [[:not, child], pos]
+  else
+    _bool_primary(tokens, pos)
+  end
+end
+
+def _bool_primary(tokens, pos)
+  tok = tokens[pos]
+  return [[:all], pos] unless tok
+  case tok[:type]
+  when :lparen
+    node, pos = _bool_or(tokens, pos + 1)
+    pos += 1 if tokens[pos]&.[](:type) == :rparen
+    [node, pos]
+  when :word
+    col, val = parse_search_term(tok[:value])
+    [[:term, col, val], pos + 1]
+  else
+    [[:all], pos]
+  end
+end
+
+def eval_bool(node, entry)
+  case node[0]
+  when :all  then true
+  when :term
+    _, col, value = node
+    needle = value.downcase
+    if col
+      entry[col].to_s.downcase.include?(needle)
+    else
+      %i[noun name location quantity character].any? { |k| entry[k].to_s.downcase.include?(needle) }
+    end
+  when :and  then eval_bool(node[1], entry) && eval_bool(node[2], entry)
+  when :or   then eval_bool(node[1], entry) || eval_bool(node[2], entry)
+  when :not  then !eval_bool(node[1], entry)
+  else true
+  end
+end
+
+def pretty_node(node)
+  return "(any)" if node.nil?
+  case node[0]
+  when :all  then "(any)"
+  when :term
+    _, col, val = node
+    col ? "#{col}:#{val}" : val
+  when :and
+    l = node[1][0] == :or ? "(#{pretty_node(node[1])})" : pretty_node(node[1])
+    r = node[2][0] == :or ? "(#{pretty_node(node[2])})" : pretty_node(node[2])
+    "#{l} AND #{r}"
+  when :or
+    "#{pretty_node(node[1])} OR #{pretty_node(node[2])}"
+  when :not
+    child = node[1]
+    inner = %i[and or].include?(child[0]) ? "(#{pretty_node(child)})" : pretty_node(child)
+    "NOT #{inner}"
+  else node.inspect
+  end
+end
+
+def parse_query(query)
+  parse_bool(tokenize_bool(query.to_s))
+end
+
+def empty_query?(node)
+  node.nil? || node[0] == :all
+end
+
+# ---------------------------------------------------------------------------
+# Price helpers
+
+def format_price(n)
+  return "Free" if n == 0
+  if n >= 1_000_000 && n % 1_000_000 == 0
+    "#{n / 1_000_000}m silvers"
+  elsif n >= 1_000 && n % 1_000 == 0
+    "#{n / 1_000}k silvers"
+  else
+    n.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse + " silvers"
+  end
+end
+
+# Returns: integer (>=0), PRICE_CLEAR, or false (bad input).
+def parse_price(s)
+  s = s.to_s.strip.downcase.gsub(',', '')
+  return PRICE_CLEAR if s =~ /\A(?:clear|remove|none|unset)\z/
+  return 0           if s =~ /\A(?:free|0+)\z/
+  if    s =~ /\A(\d+(?:\.\d+)?)m\z/ then ($1.to_f * 1_000_000).round
+  elsif s =~ /\A(\d+(?:\.\d+)?)k\z/ then ($1.to_f * 1_000).round
+  elsif s =~ /\A\d+\z/              then s.to_i
+  else  false
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Display
+
+def show_entry(prefix, e)
+  qty     = [e[:quantity].to_i, 1].max
+  qtag    = qty > 1 ? " x#{qty}" : ""
+  idtag   = e[:id].to_i > 0 ? "[#{e[:id]}] " : ""
+  chartag = e[:character].to_s.empty? ? "" : " (#{e[:character]})"
+  ptag    = case e[:price]
+            when nil then ""
+            when 0   then "  | Free"
+            else          "  | #{format_price(e[:price])}"
+            end
+  ntag = e[:note].to_s.empty? ? "" : "  | #{e[:note]}"
+  respond "  #{prefix}#{idtag}[#{e[:location]}]  #{e[:name]}  (#{e[:noun]})#{qtag}#{chartag}#{ptag}#{ntag}"
+end
+
+# ---------------------------------------------------------------------------
+# Search & Remove
+
+def run_search(query)
+  unless File.exist?(csv_path)
+    respond "transmog_inventory: no catalog found at #{csv_path}"
+    respond "  Run a scan first, e.g. ;transmog_inventory chest"
+    return
+  end
+
+  node = parse_query(query)
+  if empty_query?(node)
+    respond "transmog_inventory: provide something to search for, e.g. ;transmog_inventory search neck"
+    return
+  end
+
+  rows = read_catalog
+  if rows.any? { |r| r[:id].to_i == 0 }
+    write_catalog(rows)
+    rows = read_catalog
+  end
+  matches = rows.select { |e| eval_bool(node, e) }
+
+  if matches.empty?
+    respond "transmog_inventory: no matches for [#{pretty_node(node)}] (of #{rows.size} catalogued)."
+    return
+  end
+
+  respond "transmog_inventory: #{matches.size} match(es) for [#{pretty_node(node)}]:"
+  matches.each { |e| show_entry("", e) }
+end
+
+def run_remove(query)
+  unless File.exist?(csv_path)
+    respond "transmog_inventory: no catalog found at #{csv_path}"
+    return
+  end
+
+  if query.to_s.strip =~ /\A\d{6,9}\z/
+    item_id = query.to_s.strip.to_i
+    rows    = read_catalog
+    entry   = rows.find { |r| r[:id].to_i == item_id }
+    if entry.nil?
+      respond "transmog_inventory: no item with ID #{item_id} in your catalog."
+      respond "  Use ;transmog_inventory search to find item IDs."
+      return
+    end
+    remaining = rows.reject { |r| r[:id].to_i == item_id }
+    write_catalog(remaining)
+    respond "transmog_inventory: removed 1 entry (catalog now #{remaining.size}):"
+    show_entry("- ", entry)
+    return
+  end
+
+  tokens    = query.to_s.split(/\s+/).reject(&:empty?)
+  force_all = tokens.first&.downcase == "all" && tokens.shift
+  node      = parse_query(tokens.join(" "))
+
+  if empty_query?(node)
+    respond "transmog_inventory: specify which entry to remove, e.g."
+    respond "  ;transmog_inventory remove twisted ora ring"
+    respond "  ;transmog_inventory remove noun:band loc:finger"
+    respond "  (prefix with 'all' to remove every match: ;transmog_inventory remove all noun:ring)"
+    return
+  end
+
+  rows    = read_catalog
+  matches = rows.select { |e| eval_bool(node, e) }
+
+  if matches.empty?
+    respond "transmog_inventory: no entry matches [#{pretty_node(node)}]; nothing removed."
+    return
+  end
+
+  if matches.size > 1 && !force_all
+    respond "transmog_inventory: #{matches.size} entries match [#{pretty_node(node)}] -- refine your search,"
+    respond "  or repeat with 'all' to remove them all (;transmog_inventory remove all #{query})."
+    matches.each { |e| show_entry("", e) }
+    return
+  end
+
+  remaining = rows.reject { |e| eval_bool(node, e) }
+  write_catalog(remaining)
+  respond "transmog_inventory: removed #{matches.size} entr#{matches.size == 1 ? 'y' : 'ies'} (catalog now #{remaining.size}):"
+  matches.each { |e| show_entry("- ", e) }
+end
+
+# ---------------------------------------------------------------------------
+# Game I/O helpers
+
+def issue(cmd, start_rx, timeout: 4)
+  Lich::Util.issue_command(
+    cmd, start_rx, /<prompt/,
+    include_end: false, timeout: timeout, silent: true, usexml: true, quiet: true
+  )
+end
+
+def find_container(noun)
+  noun = noun.to_s.strip.downcase
+  pools = []
+  pools.concat(Array(GameObj.inv))
+  pools.concat(Array(GameObj.loot))
+  pools << GameObj.right_hand if GameObj.right_hand&.id
+  pools << GameObj.left_hand  if GameObj.left_hand&.id
+  GameObj.containers.each_key { |cid| obj = GameObj[cid]; pools << obj if obj }
+  pools.compact!
+  pools.find { |o| o.noun.to_s.downcase == noun } ||
+    pools.find { |o| o.name.to_s.downcase.include?(noun) }
+end
+
+def refresh_container(noun)
+  issue(
+    "look in #{noun}",
+    /In the|Inside the|There is nothing|That is closed|isn't a container|don't see|I don't|<container|<exposeContainer/i,
+    timeout: 3
+  )
+  find_container(noun)
+end
+
+def container_contents(container)
+  return [] unless container
+  Array(GameObj.containers[container.id])
+end
+
+def item_identity(obj)
+  return nil unless obj
+  ((obj.full_name rescue nil) || obj.name).to_s.strip
+end
+
+def acquire_item(container, noun, ident, tries: 4)
+  tries.times do
+    item = container_contents(container).find { |o| item_identity(o) == ident }
+    if item.nil?
+      container = refresh_container(noun)
+      item = container_contents(container).find { |o| item_identity(o) == ident }
+    end
+    if item.nil?
+      sleep 0.3
+      next
+    end
+
+    right_before = GameObj.right_hand&.id
+    left_before  = GameObj.left_hand&.id
+
+    waitrt?
+    issue(
+      "get ##{item.id}",
+      /You (?:get|pick up|remove|take|grab)|already (?:in your|holding)|What were you|I could not find|There is nothing|isn't here|don't see|need a free hand/i,
+      timeout: 3
+    )
+    waitrt?
+
+    rh = GameObj.right_hand
+    lh = GameObj.left_hand
+    held = if rh&.id && rh.id != right_before
+             rh
+           elsif lh&.id && lh.id != left_before
+             lh
+           end
+    return [container, held] if held
+
+    container = refresh_container(noun)
+  end
+  [container, nil]
+end
+
+def stow_item(container, noun, item_id, tries: 4)
+  tries.times do
+    container ||= refresh_container(noun)
+    if container
+      waitrt?
+      issue(
+        "put ##{item_id} in ##{container.id}",
+        /You put|You place|already in|won't fit|cannot|can't|There's no room|isn't a container/i,
+        timeout: 3
+      )
+      waitrt?
+    end
+    held_ids = [GameObj.right_hand&.id, GameObj.left_hand&.id]
+    return [container, true] unless held_ids.include?(item_id)
+    container = refresh_container(noun)
+  end
+  [container, false]
+end
+
+def clean_location(phrase, item)
+  loc = phrase.to_s.strip
+  loc = loc.sub(/^#{Regexp.escape(item.noun.to_s)}s?\b[,]?\s*/i, '') unless item.noun.to_s.empty?
+  loc = loc.sub(/^[a-z\-]+[,]?\s+(?=(?:on|around|over|across|slinging|from|in|under|atop|onto)\b)/i, '')
+  loc.strip
+end
+
+def slot_for(text)
+  SLOT_MAP.each { |rx, label, code| return [label, code] if text =~ rx }
+  ["unknown", nil]
+end
+
+# ---------------------------------------------------------------------------
+# Note command
+
+# target is the entry hash itself (from catalog), so only that exact row
+# changes -- not another alt's item that happens to share the name.
+def apply_note(catalog, target, note_text)
+  new_note = note_text.strip.downcase == "clear" ? "" : note_text.strip[0, NOTE_MAX_CHARS]
+  updated  = catalog.map { |r| r.equal?(target) ? r.merge(note: new_note) : r }
+  write_catalog(updated)
+  [new_note, updated]
+end
+
+def run_note(raw)
+  tokens = raw.to_s.strip.split(/\s+/, 2)
+
+  if tokens[0].to_s =~ /\A\d{6,9}\z/
+    item_id   = tokens[0].to_i
+    note_text = tokens[1].to_s.strip
+    if note_text.empty?
+      respond "transmog_inventory: provide note text (or 'clear') after the ID."
+      respond "  Example: ;transmog_inventory note #{item_id} Asking 25k"
+      return
+    end
+    catalog = read_catalog
+    entry   = catalog.find { |r| r[:id].to_i == item_id }
+    if entry.nil?
+      respond "transmog_inventory: no item with ID #{item_id} in your catalog."
+      respond "  Use ;transmog_inventory search to find item IDs."
+      return
+    end
+    new_note, = apply_note(catalog, entry, note_text)
+    if new_note.empty?
+      respond "transmog_inventory: note cleared for [#{item_id}] #{entry[:name]}."
+    else
+      respond "transmog_inventory: [#{item_id}] #{entry[:name]}"
+      respond "  Note (#{new_note.length}/#{NOTE_MAX_CHARS}): #{new_note}"
+      respond "  Run ;transmog_inventory upload to publish."
+    end
+    return
+  end
+
+  unless raw =~ /\A(.+?)\s+--\s*(.*)\z/m
+    respond "transmog_inventory: set a note by item ID:"
+    respond "  ;transmog_inventory note <id> <note text>"
+    respond "  ;transmog_inventory note <id> clear"
+    respond "Or by search (use -- to separate terms from note):"
+    respond "  ;transmog_inventory note noun:ring loc:finger -- Asking 25k"
+    respond "Run ;transmog_inventory search to see item IDs."
+    return
+  end
+
+  search_part = $1.strip
+  note_text   = $2.strip
+  node        = parse_query(search_part)
+  catalog     = read_catalog
+  matches     = catalog.select { |e| eval_bool(node, e) }
+
+  if matches.empty?
+    respond "transmog_inventory: no entries match [#{pretty_node(node)}]."
+    return
+  end
+  if matches.size > 1
+    respond "transmog_inventory: #{matches.size} entries match -- refine your search or use an ID:"
+    matches.each { |e| show_entry("", e) }
+    return
+  end
+
+  target = matches.first
+  new_note, = apply_note(catalog, target, note_text)
+  if new_note.empty?
+    respond "transmog_inventory: note cleared for [#{target[:id]}] #{target[:name]}."
+  else
+    respond "transmog_inventory: [#{target[:id]}] #{target[:name]}"
+    respond "  Note (#{new_note.length}/#{NOTE_MAX_CHARS}): #{new_note}"
+    respond "  Run ;transmog_inventory upload to publish."
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Price command
+
+def _report_price_set(id, name, new_price)
+  idtag = id.to_i > 0 ? "[#{id}] " : ""
+  if new_price.nil?
+    respond "transmog_inventory: price cleared for #{idtag}#{name}."
+  elsif new_price == 0
+    respond "transmog_inventory: #{idtag}#{name} -- listed as Free."
+    respond "  Run ;transmog_inventory upload to publish."
+  else
+    respond "transmog_inventory: #{idtag}#{name} -- price set to #{format_price(new_price)}."
+    respond "  Run ;transmog_inventory upload to publish."
+  end
+end
+
+def run_price(raw)
+  tokens = raw.to_s.strip.split(/\s+/, 2)
+
+  if tokens[0].to_s.downcase == "all"
+    price_str = tokens[1].to_s.strip
+    if price_str.empty?
+      respond "transmog_inventory: provide a price after 'all'."
+      respond "  ;transmog_inventory price all 25k"
+      respond "  ;transmog_inventory price all free"
+      respond "  ;transmog_inventory price all clear"
+      return
+    end
+    parsed = parse_price(price_str)
+    if parsed == false
+      respond "transmog_inventory: unrecognised price '#{price_str}'."
+      respond "  Use silvers (25000), shorthand (25k / 2m), 'free', or 'clear'."
+      return
+    end
+    catalog = read_catalog
+    if catalog.empty?
+      respond "transmog_inventory: no items in catalog."
+      return
+    end
+    new_price = parsed == PRICE_CLEAR ? nil : parsed
+    updated   = catalog.map { |r| r.merge(price: new_price) }
+    write_catalog(updated)
+    if new_price.nil?
+      respond "transmog_inventory: price cleared for all #{catalog.size} item(s)."
+    elsif new_price == 0
+      respond "transmog_inventory: all #{catalog.size} item(s) listed as Free."
+      respond "  Run ;transmog_inventory upload to publish."
+    else
+      respond "transmog_inventory: all #{catalog.size} item(s) priced at #{format_price(new_price)}."
+      respond "  Run ;transmog_inventory upload to publish."
+    end
+    return
+  end
+
+  if tokens[0].to_s =~ /\A\d{6,9}\z/
+    item_id   = tokens[0].to_i
+    price_str = tokens[1].to_s.strip
+    if price_str.empty?
+      respond "transmog_inventory: provide a price after the ID (or 'free' / 'clear')."
+      respond "  ;transmog_inventory price #{item_id} 25000"
+      respond "  ;transmog_inventory price #{item_id} 25k"
+      respond "  ;transmog_inventory price #{item_id} free"
+      respond "  ;transmog_inventory price #{item_id} clear"
+      return
+    end
+    parsed = parse_price(price_str)
+    if parsed == false
+      respond "transmog_inventory: unrecognised price '#{price_str}'."
+      respond "  Use silvers (25000), shorthand (25k / 2m), 'free', or 'clear'."
+      return
+    end
+    catalog = read_catalog
+    entry   = catalog.find { |r| r[:id].to_i == item_id }
+    if entry.nil?
+      respond "transmog_inventory: no item with ID #{item_id} in your catalog."
+      respond "  Use ;transmog_inventory search to find item IDs."
+      return
+    end
+    new_price = parsed == PRICE_CLEAR ? nil : parsed
+    updated   = catalog.map { |r| r[:id].to_i == item_id ? r.merge(price: new_price) : r }
+    write_catalog(updated)
+    _report_price_set(item_id, entry[:name], new_price)
+    return
+  end
+
+  unless raw =~ /\A(.+?)\s+--\s*(.*)\z/m
+    respond "transmog_inventory: set a price by item ID:"
+    respond "  ;transmog_inventory price <id> <amount>   (25000, 25k, 2m, free, clear)"
+    respond "Set price for all items at once:"
+    respond "  ;transmog_inventory price all <amount>"
+    respond "Or by search (use -- to separate search from price):"
+    respond "  ;transmog_inventory price noun:ring loc:finger -- 25k"
+    respond "Run ;transmog_inventory search to see item IDs."
+    return
+  end
+
+  search_part = $1.strip
+  price_str   = $2.strip
+  parsed      = parse_price(price_str)
+  if parsed == false
+    respond "transmog_inventory: unrecognised price '#{price_str}'."
+    respond "  Use silvers (25000), shorthand (25k / 2m), 'free', or 'clear'."
+    return
+  end
+
+  node    = parse_query(search_part)
+  catalog = read_catalog
+  matches = catalog.select { |e| eval_bool(node, e) }
+
+  if matches.empty?
+    respond "transmog_inventory: no entries match [#{pretty_node(node)}]."
+    return
+  end
+  if matches.size > 1
+    respond "transmog_inventory: #{matches.size} entries match -- refine your search or use an ID:"
+    matches.each { |e| show_entry("", e) }
+    return
+  end
+
+  target    = matches.first
+  new_price = parsed == PRICE_CLEAR ? nil : parsed
+  updated   = catalog.map do |r|
+    (r[:name] == target[:name] && r[:character] == target[:character]) ? r.merge(price: new_price) : r
+  end
+  write_catalog(updated)
+  _report_price_set(target[:id], target[:name], new_price)
+end
+
+# ---------------------------------------------------------------------------
+# Config / token / setname
+
+def load_config
+  return {} unless File.exist?(config_path)
+  begin
+    JSON.parse(File.read(config_path))
+  rescue JSON::ParserError
+    {}
+  end
+end
+
+def save_config(cfg)
+  FileUtils.mkdir_p(transmog_dir)
+  File.write(config_path, JSON.generate(cfg))
+end
+
+def load_or_create_token
+  cfg   = load_config
+  token = cfg["token"].to_s.strip
+  if token.empty?
+    token        = SecureRandom.uuid
+    cfg["token"] = token
+    save_config(cfg)
+  end
+  token
+end
+
+def run_setname(raw)
+  parts = raw.to_s.strip
+
+  if parts.empty?
+    cfg = load_config
+    pn  = cfg["player_name"].to_s.strip
+    dn  = cfg["discord_name"].to_s.strip
+    if pn.empty?
+      respond "transmog_inventory: no display name set."
+      respond "  ;transmog_inventory setname <name>"
+      respond "  ;transmog_inventory setname <name> discord:<discord_handle>"
+    else
+      discord_str = dn.empty? ? "" : " (Discord: #{dn})"
+      respond "transmog_inventory: display name: #{pn}#{discord_str}"
+      respond "  Change: ;transmog_inventory setname <new name>"
+    end
+    return
+  end
+
+  discord_match = parts.match(/(?:\s+|^)discord[:=](\S+)/i)
+  discord_name  = discord_match ? discord_match[1] : nil
+  player_name   = parts.gsub(/(?:\s+|^)discord[:=]\S+/i, '').strip
+
+  if player_name.empty?
+    respond "transmog_inventory: provide a name, e.g.:"
+    respond "  ;transmog_inventory setname Mara"
+    respond "  ;transmog_inventory setname Mara discord:mara.lilly"
+    return
+  end
+
+  cfg = load_config
+  cfg["player_name"]  = player_name
+  cfg["discord_name"] = discord_name if discord_name
+  save_config(cfg)
+
+  dn = cfg["discord_name"].to_s.strip
+  discord_str = dn.empty? ? "" : " (Discord: #{dn})"
+  respond "transmog_inventory: display name set to '#{player_name}'#{discord_str}."
+  respond "  This name will appear on the Transmog Exchange when you upload."
+end
+
+# ---------------------------------------------------------------------------
+# Upload
+
+# POST a JSON body to the Transmog Exchange API (Cloudflare Worker).
+def exchange_post(route, payload)
+  uri = URI("#{EXCHANGE_API_URL}/#{route}")
+  req = Net::HTTP::Post.new(uri)
+  req["Content-Type"]    = "application/json"
+  req["Accept-Encoding"] = "identity"
+  req["User-Agent"]      = "transmog_inventory.lic"
+  req.body = payload
+  Net::HTTP.start(uri.hostname, uri.port,
+                  use_ssl: true, open_timeout: 10, read_timeout: 30) do |http|
+    http.request(req)
+  end
+end
+
+def run_upload
+  unless File.exist?(csv_path)
+    respond "transmog_inventory: no catalog at #{csv_path} -- run a scan first."
+    return
+  end
+
+  catalog = read_catalog
+  if catalog.empty?
+    respond "transmog_inventory: catalog is empty -- run a scan first."
+    return
+  end
+
+  cfg          = load_config
+  player_name  = cfg["player_name"].to_s.strip
+  discord_name = cfg["discord_name"].to_s.strip
+
+  if player_name.empty?
+    respond "transmog_inventory: set your display name before uploading:"
+    respond "  ;transmog_inventory setname <your name>"
+    respond "  ;transmog_inventory setname Mara discord:mara.lilly"
+    return
+  end
+
+  token = load_or_create_token
+  respond "transmog_inventory: uploading #{catalog.size} item(s) as '#{player_name}'..."
+
+  items = catalog.map do |r|
+    {
+      "character"     => r[:character].to_s,
+      "noun"          => r[:noun],
+      "full_name"     => r[:name],
+      "worn_location" => r[:location],
+      "quantity"      => r[:quantity],
+      "notes"         => r[:note].to_s,
+      "price"         => r[:price],
+    }
+  end
+
+  payload = JSON.generate({
+    "player_name"  => player_name,
+    "discord_name" => discord_name.empty? ? nil : discord_name,
+    "token"        => token,
+    "items"        => items,
+  })
+
+  begin
+    resp = exchange_post("upload", payload)
+
+    result = JSON.parse(resp.body) rescue {}
+
+    if result["success"]
+      respond "transmog_inventory: uploaded #{result['items_uploaded']} item(s) as '#{player_name}'."
+      respond "  Browse the exchange: #{EXCHANGE_WEB_URL}"
+    elsif result["error"]
+      respond "transmog_inventory: upload failed -- #{result['message'] || result['error']}"
+    else
+      respond "transmog_inventory: unexpected response (HTTP #{resp.code})."
+      respond "  #{resp.body.to_s[0..200]}" if resp.body
+    end
+  rescue => e
+    respond "transmog_inventory: upload error -- #{e.class}: #{e.message}"
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Clear web entries
+
+def run_clearweb(raw)
+  unless raw.to_s.strip.downcase == "confirm"
+    respond "transmog_inventory: clearweb removes ALL your entries from the Transmog Exchange web database."
+    respond "  Your local CSV file is NOT affected -- only the web listing is cleared."
+    respond "  To proceed: ;transmog_inventory clearweb confirm"
+    return
+  end
+
+  cfg         = load_config
+  player_name = cfg["player_name"].to_s.strip
+  if player_name.empty?
+    respond "transmog_inventory: no display name set -- nothing to clear from the web."
+    respond "  (If you have uploaded before, set your name with ;transmog_inventory setname first.)"
+    return
+  end
+
+  token = load_or_create_token
+  respond "transmog_inventory: clearing web entries for '#{player_name}'..."
+
+  payload = JSON.generate({ "token" => token })
+
+  begin
+    resp = exchange_post("clear", payload)
+
+    result = JSON.parse(resp.body) rescue {}
+
+    if result["success"]
+      removed = result["items_removed"]
+      if removed.to_i == 0
+        respond "transmog_inventory: no web entries found for '#{player_name}' (already clear)."
+      else
+        respond "transmog_inventory: removed #{removed} item(s) for '#{player_name}' from the web database."
+        respond "  Your local CSV is untouched. Upload again any time: ;transmog_inventory upload"
+      end
+    elsif result["error"]
+      respond "transmog_inventory: clearweb failed -- #{result['message'] || result['error']}"
+    else
+      respond "transmog_inventory: unexpected response (HTTP #{resp.code})."
+      respond "  #{resp.body.to_s[0..200]}" if resp.body
+    end
+  rescue => e
+    respond "transmog_inventory: clearweb error -- #{e.class}: #{e.message}"
+  end
+end
+
+# ---------------------------------------------------------------------------
+# GUI browser
+
+def run_gui
+  unless File.exist?(csv_path)
+    respond "transmog_inventory: no catalog found -- run a scan first."
+    return
+  end
+
+  begin
+    require 'gtk3'
+  rescue LoadError
+    respond "transmog_inventory: GTK3 not available -- use ;transmog_inventory search instead."
+    return
+  end
+
+  # File I/O on the script thread before touching GTK.
+  catalog = with_catalog_lock do
+    rows = read_catalog
+    write_catalog(rows) if rows.any? { |r| r[:id].to_i == 0 }   # assigns missing IDs
+    read_catalog
+  end
+
+  closed   = false
+  # ponytail: hold every Ruby-GTK wrapper here so Ruby's GC doesn't call
+  # g_object_unref on a non-GTK thread while the main loop still uses them
+  # (segfault in rb_objspace_call_finalizer / g_object_unref / gtk_tree_view).
+  # Cleared implicitly when run_gui returns, after GTK destroy has done C cleanup.
+  gtk_refs     = []
+  # GTK handlers never touch the file (cross-thread I/O disconnects Lich).
+  # Each edit is a proc rows -> rows: applied to the in-memory catalog at once,
+  # and queued for the script thread to replay against a fresh read of the CSV
+  # under the lock, so changes other alts made meanwhile aren't overwritten.
+  edits = Thread::Queue.new
+  apply = lambda do |op|
+    catalog = op.call(catalog)
+    edits << op
+  end
+
+  # ponytail: GLib::Idle.add runs this block on the GTK main thread, which owns
+  # the Windows message pump. Creating widgets from the script thread causes the
+  # "Not Responding" freeze because GTK starves the pump mid-construction.
+  GLib::Idle.add do
+    store = Gtk::ListStore.new(Integer, String, String, String, String, Integer, String, String)
+
+    fill_store = lambda do |cat, query|
+      store.clear
+      rows = if query.to_s.strip.empty?
+        cat
+      else
+        node = parse_query(query)
+        cat.select { |e| eval_bool(node, e) }
+      end
+      rows.each do |r|
+        it = store.append
+        it[0] = r[:id].to_i
+        it[1] = r[:character].to_s
+        it[2] = r[:noun].to_s
+        it[3] = r[:name].to_s
+        it[4] = r[:location].to_s
+        it[5] = r[:quantity].to_i
+        it[6] = r[:price] ? format_price(r[:price]) : ""
+        it[7] = r[:note].to_s
+      end
+      rows.size
+    end
+
+    fill_store.call(catalog, "")
+
+    tree = Gtk::TreeView.new(store)
+    sel  = tree.selection
+    sel.mode = :multiple
+
+    # Read-only columns
+    [[0, "ID", 90], [1, "Character", 90], [2, "Noun", 80], [3, "Full Name", 340],
+     [4, "Worn Location", 160], [5, "Qty", 40]].each do |idx, title, w|
+      r = Gtk::CellRendererText.new
+      c = Gtk::TreeViewColumn.new(title, r, text: idx)
+      c.resizable = true
+      c.min_width = w
+      c.sort_column_id = idx
+      tree.append_column(c)
+      gtk_refs << r << c
+    end
+
+    # Editable Price column
+    price_r = Gtk::CellRendererText.new
+    price_r.editable = true
+    price_r.signal_connect("edited") do |_, path_str, new_text|
+      it = store.get_iter(Gtk::TreePath.new(path_str))
+      next unless it
+      item_id = it[0]
+      parsed = parse_price(new_text.strip)
+      next if parsed == false
+      new_price = parsed == PRICE_CLEAR ? nil : parsed
+      apply.call(->(rows) { rows.map { |r| r[:id].to_i == item_id ? r.merge(price: new_price) : r } })
+      it[6] = new_price ? format_price(new_price) : ""
+    end
+    price_c = Gtk::TreeViewColumn.new("Price", price_r, text: 6)
+    price_c.resizable = true
+    price_c.min_width = 120
+    price_c.sort_column_id = 6
+    tree.append_column(price_c)
+
+    # Editable Note column
+    note_r = Gtk::CellRendererText.new
+    note_r.editable = true
+    note_r.signal_connect("edited") do |_, path_str, new_text|
+      it = store.get_iter(Gtk::TreePath.new(path_str))
+      next unless it
+      item_id = it[0]
+      new_note = new_text.strip.downcase == "clear" ? "" : new_text.strip[0, NOTE_MAX_CHARS]
+      apply.call(->(rows) { rows.map { |r| r[:id].to_i == item_id ? r.merge(note: new_note) : r } })
+      it[7] = new_note
+    end
+    note_c = Gtk::TreeViewColumn.new("Note", note_r, text: 7)
+    note_c.resizable = true
+    note_c.min_width = 200
+    note_c.sort_column_id = 7
+    tree.append_column(note_c)
+
+    search = Gtk::Entry.new
+    status = Gtk::Label.new("#{catalog.size} items  |  click Price or Note cells to edit")
+
+    search.signal_connect("changed") do
+      n = fill_store.call(catalog, search.text)
+      status.text = "#{n} shown / #{catalog.size} total"
+    end
+
+    del_btn = Gtk::Button.new(label: "Delete Selected")
+    del_btn.signal_connect("clicked") do
+      begin
+        raw = sel.selected_rows
+        # GI-based ruby-gtk3 returns [paths_array, model]; older binding returns paths_array.
+        paths = (raw.is_a?(Array) && raw[0].is_a?(Array)) ? raw[0] : Array(raw)
+        next if paths.empty?
+        # Get fresh iters from the store via each path (same pattern as note handler).
+        iters = paths.map { |p| store.get_iter(p) }.compact
+        next if iters.empty?
+        ids = iters.map { |it| it[0] }.to_set
+        apply.call(->(rows) { rows.reject { |r| ids.include?(r[:id].to_i) } })
+        iters.reverse_each { |it| store.remove(it) }
+        q = search.text.to_s.strip
+        n_shown = if q.empty?
+          catalog.size
+        else
+          node = parse_query(q)
+          catalog.count { |e| eval_bool(node, e) }
+        end
+        status.text = "#{n_shown} shown / #{catalog.size} total"
+      rescue => e
+        status.text = "Delete error: #{e.class}: #{e.message[0, 80]}"
+      end
+    end
+
+    top = Gtk::Box.new(:horizontal, 5)
+    top.pack_start(Gtk::Label.new("Search:"), expand: false)
+    top.pack_start(search, expand: true, fill: true)
+
+    scroll = Gtk::ScrolledWindow.new
+    scroll.set_policy(:automatic, :automatic)
+    scroll.add(tree)
+
+    bot = Gtk::Box.new(:horizontal, 5)
+    bot.pack_start(status, expand: true, fill: true, padding: 5)
+    bot.pack_start(del_btn, expand: false)
+
+    vbox = Gtk::Box.new(:vertical, 5)
+    vbox.border_width = 8
+    vbox.pack_start(top, expand: false)
+    vbox.pack_start(scroll, expand: true, fill: true)
+    vbox.pack_start(bot, expand: false)
+
+    win = Gtk::Window.new("Transmog Inventory")
+    win.set_default_size(1100, 600)
+    win.add(vbox)
+    win.signal_connect("destroy") { closed = true }
+    gtk_refs.concat([store, tree, sel, price_r, price_c, note_r, note_c,
+                     search, status, del_btn, top, scroll, bot, vbox, win])
+    win.show_all
+
+    false  # don't repeat
+  end
+
+  flush = lambda do
+    next if edits.empty?
+    with_catalog_lock do
+      rows = read_catalog
+      rows = edits.pop.call(rows) until edits.empty?
+      write_catalog(rows)
+    end
+  end
+  until closed
+    flush.call
+    sleep 0.1
+  end
+  flush.call   # edits made just before the window closed
+end
+
+# ---------------------------------------------------------------------------
+# Command dispatch
+
+if script.vars[1].to_s =~ /^(?:help|\?|-h|--help)$/i
+  usage(script.vars[2])
+  exit
+end
+
+with_catalog_lock { migrate_old_csvs }  # one-time auto-import from old per-character CSV files
+
+if script.vars[1].to_s =~ /^(?:search|find|s)$/i
+  query = script.vars[0].to_s.sub(/\A\s*(?:search|find|s)\s+/i, "")
+  with_catalog_lock { run_search(query) }
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:remove|rm|delete|del)$/i
+  query = script.vars[0].to_s.sub(/\A\s*(?:remove|rm|delete|del)\s+/i, "")
+  with_catalog_lock { run_remove(query) }
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:upload|push|sync)$/i
+  run_upload
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:clearweb|deleteweb|removeweb)$/i
+  raw = script.vars[0].to_s.sub(/\A\s*(?:clearweb|deleteweb|removeweb)\s*/i, "")
+  run_clearweb(raw)
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:note|notes|tag)$/i
+  raw = script.vars[0].to_s.sub(/\A\s*(?:note|notes|tag)\s+/i, "")
+  with_catalog_lock { run_note(raw) }
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:price|setprice)$/i
+  raw = script.vars[0].to_s.sub(/\A\s*(?:price|setprice)\s+/i, "")
+  with_catalog_lock { run_price(raw) }
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:setname|name|displayname)$/i
+  raw = script.vars[0].to_s.sub(/\A\s*(?:setname|name|displayname)\s*/i, "")
+  run_setname(raw)
+  exit
+end
+
+if script.vars[1].to_s =~ /^(?:gui|browse|ui)$/i
+  run_gui
+  exit
+end
+
+# ---------------------------------------------------------------------------
+# Scan
+
+args  = script.vars[0].to_s.dup
+debug = !!args.slice!(/\bdebug\b/i)
+fresh = !!args.slice!(/\b(?:new|fresh|reset|rebuild)\b/i)
+merge = !fresh
+container_noun = args.strip.squeeze(" ")
+container_noun = "chest" if container_noun.empty?
+
+if checkright && checkleft
+  respond "transmog_inventory: both hands are full -- I need at least one free hand."
+  respond "  (If a previous run was interrupted, you may be holding items from the chest;"
+  respond "   put them back, e.g. PUT LEFT IN #{container_noun} / PUT RIGHT IN #{container_noun}.)"
+  exit
+end
+
+container = refresh_container(container_noun)
+if container.nil?
+  respond "transmog_inventory: couldn't find a container nouned '#{container_noun}'."
+  respond "Make sure your locker is open and the chest is in the room (LOOK IN #{container_noun} should work),"
+  respond "or that you are wearing/holding it. You can also pass a different name, e.g. ;transmog_inventory chest"
+  exit
+end
+
+container_label = container.name.to_s
+char_name       = (Char.name rescue nil) || XMLData.name
+respond "transmog_inventory: scanning '#{container_label}' as #{char_name}..."
+
+contents = container_contents(container)
+if contents.empty?
+  respond "transmog_inventory: nothing found inside '#{container_label}'. (Is it open and accessible?)"
+  exit
+end
+
+order = []
+qty   = Hash.new(0)
+contents.each do |item|
+  next unless item.type.to_s =~ TRANSMOG_TYPES
+  ident = item_identity(item)
+  next if ident.nil? || ident.empty?
+  order << ident unless qty.key?(ident)
+  qty[ident] += 1
+end
+
+respond "transmog_inventory: #{contents.size} item(s) inside, #{order.size} distinct wearable candidate(s) to check."
+
+results = []
+skipped = []
+
+order.each_with_index do |name, idx|
+  tag = qty[name] > 1 ? " (x#{qty[name]})" : ""
+  respond "  [#{idx + 1}/#{order.size}] #{name}#{tag}..."
+
+  item_id = nil
+  begin
+    container, held = acquire_item(container, container_noun, name)
+    if held.nil?
+      respond "    -> couldn't retrieve it after retries (locker IDs may be rolling); skipping."
+      skipped << name
+      next
+    end
+
+    item_id   = held.id
+    item_noun = held.noun.to_s
+
+    analyze_lines = issue(
+      "analyze ##{item_id}",
+      /You analyze|cannot be analyzed|not a sound idea|isn't a sound idea|don't think/i
+    )
+    respond "    [debug] ANALYZE: #{analyze_lines.inspect}" if debug
+    is_transmog = analyze_lines.any? { |l| l =~ TRANSMOG_LINE }
+
+    unless is_transmog
+      respond "    -> not a transmog; returned."
+      next
+    end
+
+    inspect_lines = issue(
+      "inspect ##{item_id}",
+      /you could wear|not a sound idea|isn't a sound idea|cannot|You carefully inspect|You determine/i
+    )
+    respond "    [debug] INSPECT: #{inspect_lines.inspect}" if debug
+
+    inspect_text = inspect_lines.join(" ")
+    worn_slot, worn_code = slot_for(inspect_text)
+
+    m = inspect_text.match(/you could wear (?:the |your |a |an |some )?(.+?)\.(?:\s|$)/i)
+    worn_phrase = m ? clean_location(m[1], held) : nil
+
+    worn_location = if worn_code
+                      "#{worn_slot} (#{worn_code})"
+                    elsif worn_phrase && !worn_phrase.empty?
+                      worn_phrase
+                    else
+                      "unknown"
+                    end
+
+    results << {
+      character: char_name,
+      noun:      item_noun,
+      name:      name,
+      location:  worn_location,
+      quantity:  qty[name],
+      note:      "",
+      price:     nil,
+    }
+
+    respond "    -> transmog | worn: #{worn_location}"
+  rescue StandardError => e
+    respond "    -> ERROR while processing '#{name}': #{e.class} #{e.message}"
+    skipped << name unless skipped.include?(name)
+  ensure
+    if item_id
+      held_ids = [GameObj.right_hand&.id, GameObj.left_hand&.id]
+      if held_ids.include?(item_id)
+        container, ok = stow_item(container, container_noun, item_id)
+        respond "    -> WARNING: couldn't return '#{name}' to the container; it may be in your hand." unless ok
+      end
+    end
+  end
+
+  if debug && results.size >= 2
+    respond "transmog_inventory: debug stop after 2 items. Paste the [debug] lines above."
+    break
+  end
+end
+
+# ---- write CSV ----------------------------------------------------------------
+
+respond ""
+respond "transmog_inventory: scanned #{results.size} transmog item(s) in '#{container_label}'."
+unless skipped.empty?
+  respond "transmog_inventory: #{skipped.size} item(s) could not be retrieved and were skipped:"
+  skipped.each { |s| respond "    - #{s}" }
+end
+
+with_catalog_lock do
+  if merge
+    existing      = read_catalog
+    existing_keys = existing.map { |e| "#{e[:name].downcase}|#{e[:character].to_s.downcase}" }.to_set
+    added         = results.reject { |r| existing_keys.include?("#{r[:name].downcase}|#{r[:character].to_s.downcase}") }
+    dup_count     = results.size - added.size
+    combined      = existing + added
+    write_catalog(combined)
+    respond "transmog_inventory: added #{added.size} new (#{dup_count} already in list); catalog now #{combined.size} item(s)."
+  else
+    # Shared CSV: a fresh scan replaces only this character's rows.
+    others, mine = read_catalog.partition { |r| !r[:character].casecmp?(char_name) }
+    write_catalog(others + results)
+    if mine.any?
+      respond "transmog_inventory: replaced #{char_name}'s #{mine.size} previous item(s) with a fresh scan of #{results.size}."
+    else
+      respond "transmog_inventory: saved a fresh scan of #{results.size} item(s)."
+    end
+    respond "  (#{others.size} item(s) from other characters kept.)" if others.any?
+  end
+end
+
+respond "Saved to: #{csv_path}"
